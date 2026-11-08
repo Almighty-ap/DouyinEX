@@ -1,0 +1,220 @@
+# <div align="center">DouyinEX · 抖音直播间增强</div>
+
+<p align="center">
+  一个为抖音网页直播间补上「本该有」的观看体验的油猴脚本。<br />
+  专注看播本身：画质、全屏、弹幕治理与互动，而不是把界面塞满按钮。
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Tampermonkey-✔-499C3B?style=for-the-badge&logo=tampermonkey&logoColor=white" />
+  <img src="https://img.shields.io/badge/UserScript-ES2020-fe2c55?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/抖音直播-live.douyin.com-000000?style=for-the-badge&logo=tiktok&logoColor=white" />
+  <img src="https://img.shields.io/badge/License-MIT-2ea44f?style=for-the-badge" />
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/github/stars/Almighty-ap/DouyinEX?style=flat-square" />
+  <img src="https://img.shields.io/github/issues/Almighty-ap/DouyinEX?style=flat-square" />
+  <img src="https://img.shields.io/github/last-commit/Almighty-ap/DouyinEX?style=flat-square" />
+  <img src="https://img.shields.io/github/repo-size/Almighty-ap/DouyinEX?style=flat-square" />
+</p>
+
+<p align="center">
+  <a href="#功能特性">功能特性</a> ·
+  <a href="#安装">安装</a> ·
+  <a href="#使用">使用</a> ·
+  <a href="#开发与构建">开发与构建</a> ·
+  <a href="#已知限制">已知限制</a>
+</p>
+
+---
+
+## 项目简介
+
+本项目沿用斗鱼直播间增强脚本 [**DouyuEx**](https://github.com/qianjiachun/douyuEx) 的思路，把同类能力搬到抖音网页直播间：不改造原生界面，只补上原生缺失的观看与互动体验。
+
+> [DouyuEx](https://github.com/qianjiachun/douyuEx) 是斗鱼网页直播间的增强油猴脚本，功能成熟、长期维护。本项目的模块划分、交互习惯与「尽量复用原生控件」的取舍都参考了它，在此致谢。
+
+**它做了什么**：
+
+- **直播流** —— 解析直播间的 FLV / HLS 地址，按原画 / 超清 / 高清 / 标清分档复制，可丢进 PotPlayer、VLC、OBS。
+- **播放体验** —— 进房自动最高画质（自动跳过需登录的档位）、可选进房自动网页全屏、播放器内滚轮调音量。
+- **弹幕治理** —— 接管画面悬浮弹幕，让关键词 / 等级 / 重复 / 进场屏蔽与悬停 **+1** 真正生效；右侧聊天列表同步支持。
+- **循环发送** —— 多行文本按间隔循环或随机发送，可限时，发送失败自动停止。
+- **简洁模式** —— 一键收起横幅、小黄车、榜单入口，并联动抖音自己的送礼信息 / 福袋口令 / 礼物特效开关，关闭时按原值还原。
+
+**两条原则**：不接管原生界面（只多一个悬浮球和一个窄面板）；能用抖音自己的开关解决的绝不替换渲染——屏蔽与 +1 是例外，因为原生弹幕跑在 canvas 上，没有 DOM 可供命中。
+
+---
+
+## 功能特性
+
+### 直播流
+
+- **一键复制直播流地址**：从页面 SSR 数据（`__pace_f`）中解析 FLV / HLS 地址，按原画、超清、高清、标清分档列出，点击即复制，可直接粘贴到 PotPlayer、VLC、OBS 等播放器。
+- **SPA 切换房间自动跟随**：每次取流都重新解析，切换直播间后无需刷新页面。
+- 支持 `flv` 与 `hls` 两种协议，只展示当前房间真实可用的档位。
+
+### 播放体验
+
+- **自动最高画质**：进房后自动点选当前可用的最高档位，并自动跳过带「登录即享」角标、点击会弹登录框的档位。
+- **进房自动网页全屏**：按需开启。
+- **播放器内滚轮调音量**：鼠标在播放器上滚动即可调节音量，不再需要去找音量条。
+
+### 弹幕治理（画面悬浮弹幕 + 右侧聊天列表）
+
+抖音的悬浮弹幕由 `canvas + Web Worker` 绘制，没有 DOM 节点，因此既无法按条隐藏，也无法在弹幕上挂按钮。DouyinEX 的处理方式是**接管渲染**：
+
+- 包装弹幕插件的 `send(payload)`，在入绘制队列前截获每条弹幕；
+- 命中规则的直接丢弃，其余用 DOM 复刻成悬浮弹幕（保留颜色、字号、速度、轨道与显示区域）；
+- 悬停弹幕会暂停移动，并浮出 **+1** 按钮，点击即用这条弹幕的正文跟发；
+- 纯图片 / 礼物流水等非文字内容原样交回原生 canvas，保证礼物信息不丢失。
+
+屏蔽规则（同时作用于画面悬浮弹幕与右侧聊天列表）：
+
+| 规则 | 说明 |
+|---|---|
+| 关键词 | 一行一条，支持 `/正则/` 写法 |
+| 用户等级 | 屏蔽等级低于指定值的用户 |
+| 重复弹幕 | 10 秒内同一内容只保留第一条 |
+| 进场消息 | 屏蔽「xxx 来了」 |
+
+右侧聊天列表保留 +1 与全部屏蔽能力，行为与原生列表一致。
+
+### 循环发送
+
+- 多行文本按顺序循环发送，也可随机取一条；
+- 自定义发送间隔区间（毫秒级随机抖动）与总时长（分钟）；
+- 发送失败（未登录、输入框不可用）时自动停止并提示。
+
+### 简洁模式
+
+一个开关同时做四件事，把看播界面收拾干净：
+
+- 隐藏顶部活动横幅、小黄车（含工具条里的「全部商品」入口）、小时榜入口；
+- 联动抖音自己的设置：关闭「送礼信息」「福袋口令」，开启「屏蔽礼物特效」；
+- 右侧聊天列表隐藏送礼流水；
+- 关闭简洁模式时，按开启前记录的原值逐项还原抖音自己的开关。
+
+> 说明：福袋 / 口令类消息在 DOM 中与普通聊天完全一致，按正文匹配会误杀正常弹幕，因此**不做屏蔽**。
+
+---
+
+## 安装
+
+1. 浏览器安装 [Tampermonkey](https://www.tampermonkey.net/)（Violentmonkey 亦可）。
+2. 点击安装脚本：
+
+   **[安装 DouyinEX](https://raw.githubusercontent.com/Almighty-ap/DouyinEX/main/dist/douyinex.user.js)**
+
+   备用地址（CDN 加速）：
+
+   ```text
+   https://cdn.jsdelivr.net/gh/Almighty-ap/DouyinEX@main/dist/douyinex.user.js
+   ```
+3. 打开任意直播间（`https://live.douyin.com/<房间号>`），右下角出现悬浮球即安装成功。
+
+脚本头部带有 `@updateURL` / `@downloadURL`，指向本仓库 `main` 分支的构建产物，后续更新可直接在 Tampermonkey 里检查更新。
+
+**支持环境**：Chrome / Edge / Firefox + Tampermonkey 或 Violentmonkey。需要 `unsafeWindow` 权限，Safari 等不支持该能力的环境无法运行。
+
+---
+
+## 使用
+
+### 设置面板
+
+点击右下角悬浮球打开面板，所有开关即时生效并保存到本地（`GM_setValue`，无 GM 环境时回落 `localStorage`）。
+
+### 菜单命令
+
+在 Tampermonkey 的脚本菜单中还可以直接：
+
+- **DouyinEX 设置面板** —— 打开 / 关闭面板
+- **复制直播流（最高画质 FLV）** —— 不看面板也能一把复制
+
+### 设置项
+
+| 设置 | 默认 | 说明 |
+|---|---|---|
+| 自动最高画质 | 开 | 进房自动切到最高可用档位 |
+| 进房自动网页全屏 | 关 | 自动触发抖音的「网页全屏」 |
+| 播放器内滚轮调音量 | 开 | 播放器区域滚轮调节音量 |
+| 简洁模式 | 关 | 隐藏横幅 / 小黄车 / 榜单，并联动抖音弹幕与礼物开关 |
+| 接管悬浮弹幕 | 开 | 画面弹幕走 DouyinEX 渲染，屏蔽与 +1 才生效 |
+| 弹幕 +1 | 开 | 悬停弹幕 / 聊天条目时浮出跟发按钮 |
+| 屏蔽进场消息 | 关 | 过滤「xxx 来了」 |
+| 屏蔽重复弹幕 | 关 | 10 秒内相同内容只留一条 |
+| 屏蔽等级低于 | 0（不限） | 按用户等级过滤 |
+| 关键词屏蔽 | 空 | 一行一条，`/正则/` 亦可 |
+| 循环发送 | 空 | 弹幕文本、间隔区间、总时长、是否随机 |
+
+---
+
+## 项目结构
+
+```text
+DouyinEX/
+├── build.js                 # esbuild 打包，拼接 UserScript 头部
+├── package.json
+├── src/
+│   ├── header.txt           # UserScript 元数据（@namespace / @updateURL 等）
+│   ├── main.js              # 入口：初始化各模块
+│   ├── common/              # 设置存储、DOM 工具、GM API 适配
+│   ├── lib/                 # 纯函数：流解析、过滤规则、弹幕轨道分配
+│   └── packages/
+│       ├── Panel/           # 悬浮球与设置面板
+│       ├── Player/          # 播放器增强与简洁模式
+│       ├── Stream/          # 直播流解析与复制
+│       ├── Chat/            # 聊天列表屏蔽、发送、循环
+│       └── Danmaku/         # 悬浮弹幕接管层
+├── tests/                   # node:test 单元测试（纯函数）
+└── dist/douyinex.user.js    # 构建产物，安装用的就是它
+```
+
+设计上把「能单测的逻辑」全部下沉到 `src/lib/`：流地址解析、关键词与正则规则、重复过滤、弹幕轨道分配都是无副作用纯函数，`packages/` 只负责和页面打交道。
+
+---
+
+## 开发与构建
+
+需要 Node.js 18+。
+
+```bash
+npm install
+npm run build
+```
+
+构建产物写入 `dist/douyinex.user.js`（脚本头部版本号取自 `package.json`）。
+
+本地调试可把产物直接拖进 Tampermonkey 新建脚本，或使用 Tampermonkey 的「从文件安装」。
+
+### 单元测试
+
+```bash
+node --test tests/filter.test.js
+node --test tests/stream.test.js
+node --test tests/barrage.test.js
+```
+
+---
+
+## 已知限制
+
+- **依赖页面结构**：弹幕接管通过 React fiber 反查插件实例，简洁模式通过 `data-e2e`、自绘开关的背景色判断状态。抖音前端改版可能导致对应功能失效，脚本会在下次轮询时自动重试，但结构大改仍需跟进适配。
+- **关闭「接管悬浮弹幕」后**，画面弹幕回到原生 canvas，此时屏蔽与 +1 仅作用于右侧聊天列表。
+- **发送类功能需要登录**：未登录或输入框不可用时，+1 与循环发送会明确提示失败，不会静默丢弃。
+- **不处理福袋 / 口令类消息**：这类消息与正常弹幕在 DOM 中无法区分，为避免误杀一律不做过滤。
+- 脚本不修改、不代理任何抖音接口请求，所有数据都来自页面自身已加载的内容。
+
+---
+
+## 免责声明
+
+本项目仅供个人学习与研究使用，与抖音官方无任何关联。使用本脚本可能违反平台的用户协议，由此产生的一切后果由使用者自行承担。请勿将本项目用于商业用途、批量操作或任何破坏平台正常秩序的场景。
+
+---
+
+## License
+
+[MIT](LICENSE)

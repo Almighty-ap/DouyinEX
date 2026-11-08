@@ -1,0 +1,18 @@
+// ==UserScript==
+// @name         DouyinEX-抖音直播间增强插件
+// @namespace    https://github.com/Almighty-ap/DouyinEX
+// @version      __VERSION__
+// @description  抖音直播间增强：复制直播流(原画/超清/高清) 自动最高画质 自动网页全屏 滚轮调音量 弹幕屏蔽(关键词/等级/进场) 弹幕+1 循环发送弹幕 简洁模式
+// @author       DouyinEX
+// @homepageURL  https://github.com/Almighty-ap/DouyinEX
+// @supportURL   https://github.com/Almighty-ap/DouyinEX/issues
+// @updateURL    https://raw.githubusercontent.com/Almighty-ap/DouyinEX/main/dist/douyinex.user.js
+// @downloadURL  https://raw.githubusercontent.com/Almighty-ap/DouyinEX/main/dist/douyinex.user.js
+// @match        *://live.douyin.com/*
+// @run-at       document-idle
+// @grant        GM_setClipboard
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
+// @grant        unsafeWindow
+// ==/UserScript==

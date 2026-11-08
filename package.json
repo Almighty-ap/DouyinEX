@@ -1,0 +1,13 @@
+{
+  "name": "douyinex",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DouyinEX - 抖音直播间增强油猴脚本",
+  "scripts": {
+    "build": "node build.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

@@ -1,0 +1,37 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  parseKeywords,
+  matchKeywords,
+  parseLevelFromSrc,
+  createRepeatFilter,
+} from "../src/lib/filter.js";
+
+test("parseKeywords 支持子串与正则，忽略空行与非法正则", () => {
+  const rules = parseKeywords("刷屏\n\n/^6{3,}$/i\n/(/\n");
+  assert.equal(rules.length, 3);
+  assert.equal(rules[0].type, "str");
+  assert.equal(rules[1].type, "re");
+  assert.equal(rules[2].type, "str"); // 非法正则退化
+});
+
+test("matchKeywords 命中判断", () => {
+  const rules = parseKeywords("刷屏\n/^6{3,}$/");
+  assert.equal(matchKeywords("不要刷屏", rules), true);
+  assert.equal(matchKeywords("6666", rules), true);
+  assert.equal(matchKeywords("66", rules), false);
+});
+
+test("parseLevelFromSrc 提取用户等级", () => {
+  const src = "https://p11.douyinpic.com/img/webcast/new_user_grade_level_v1_9.png~tplv-obj.image";
+  assert.equal(parseLevelFromSrc(src), 9);
+  assert.equal(parseLevelFromSrc("https://x/y.png"), null);
+  assert.equal(parseLevelFromSrc(undefined), null);
+});
+
+test("createRepeatFilter 窗口内重复判定，过期后重置", () => {
+  const isRepeat = createRepeatFilter(1000);
+  assert.equal(isRepeat("哈哈", 0), false);
+  assert.equal(isRepeat("哈哈", 500), true);
+  assert.equal(isRepeat("哈哈", 2000), false);
+});
