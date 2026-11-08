@@ -4,6 +4,7 @@
 // @version      0.1.0
 // @description  抖音直播间增强：复制直播流(原画/超清/高清) 自动最高画质 自动网页全屏 滚轮调音量 弹幕屏蔽(关键词/等级/进场) 弹幕+1 循环发送弹幕 简洁模式
 // @author       DouyinEX
+// @license      MIT
 // @homepageURL  https://github.com/Almighty-ap/DouyinEX
 // @supportURL   https://github.com/Almighty-ap/DouyinEX/issues
 // @updateURL    https://raw.githubusercontent.com/Almighty-ap/DouyinEX/main/dist/douyinex.user.js

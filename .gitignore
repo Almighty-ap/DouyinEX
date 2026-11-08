@@ -1,2 +1,5 @@
 node_modules/
 .playwright-mcp/
+AGENTS.md
+PROJECT_INDEX.md
+docs/context/
