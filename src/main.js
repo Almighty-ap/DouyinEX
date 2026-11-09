@@ -1,9 +1,15 @@
 import { getSettings } from "./common/settings.js";
 import { initPanel } from "./packages/Panel/Panel.js";
 import { copyStream, autoHighestQuality } from "./packages/Stream/Stream.js";
-import { autoWebFull, initWheelVolume, initSimpleMode } from "./packages/Player/Player.js";
+import {
+  autoWebFull,
+  initWheelVolume,
+  initSimpleMode,
+  initFullscreenFoldChat,
+} from "./packages/Player/Player.js";
 import { initChatShield } from "./packages/Chat/Shield.js";
 import { initDanmakuLayer } from "./packages/Danmaku/Layer.js";
+import { initLottery } from "./packages/Lottery/Lottery.js";
 
 function registerMenu(panel) {
   if (typeof GM_registerMenuCommand !== "function") return;
@@ -15,9 +21,11 @@ function main() {
   const panel = initPanel();
   registerMenu(panel);
   initSimpleMode();
+  initFullscreenFoldChat();
   initWheelVolume();
   initChatShield();
   initDanmakuLayer();
+  initLottery();
 
   const s = getSettings();
   if (s.autoQuality) autoHighestQuality();

@@ -3,9 +3,13 @@ import { getValue, setValue } from "./env.js";
 export const DEFAULTS = {
   autoQuality: true,
   autoWebFull: false,
+  fullscreenFoldChat: true,
   wheelVolume: true,
   simpleMode: false,
   simpleRestore: null,
+  autoLottery: false,
+  autoLotteryFollow: false,
+  ballPos: null,
   plus1: true,
   danmakuTakeover: true,
   shieldKeywords: "",

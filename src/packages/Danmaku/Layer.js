@@ -3,7 +3,7 @@ import { getSettings, onSettingChange } from "../../common/settings.js";
 import { parseKeywords, matchKeywords, createRepeatFilter } from "../../lib/filter.js";
 import { extractBarrage } from "../../lib/barrage.js";
 import { sendChat } from "../Chat/send.js";
-import { toast } from "../../common/dom.js";
+import { toast, injectStyle } from "../../common/dom.js";
 
 /**
  * 悬浮弹幕层接管。
@@ -13,7 +13,8 @@ import { toast } from "../../common/dom.js";
  *   1. 包装弹幕插件的 send(payload)，在入绘制队列前截下每条弹幕；
  *   2. 过滤命中屏蔽规则的直接丢弃；
  *   3. 其余的用 DOM 自己渲染成悬浮弹幕，悬停出现 +1 按钮。
- * 非文字内容（纯图片 / 礼物流水）原样交回原生 canvas 渲染，保证礼物信息不丢。
+ * 接管成功后隐藏原生 canvas，纯图片 / 礼物流水也由 DOM 层复刻，避免双重渲染且不丢礼物信息；
+ * 关闭接管或尚未成功包装插件时，恢复原生 canvas 渲染。
  */
 
 const LAYER_ID = "dyex-dm-layer";
@@ -21,6 +22,11 @@ const ITEM_CLS = "dyex-dm-item";
 const PLUS_CLS = "dyex-dm-plus1";
 const PLUGIN = ".CanvasDanmakuPlugin";
 const MAX_ITEMS = 80;
+const NATIVE_STYLE_ID = "dyex-dm-native-off";
+// 只隐藏 canvas，不隐藏 .CanvasDanmakuPlugin 容器本身：
+// 容器可能同时承载我们的 #dyex-dm-layer，整层隐藏会把 DOM 复刻层一起藏掉。
+const NATIVE_HIDDEN_CSS =
+  ".CanvasDanmakuPlugin canvas, canvas.CanvasDanmakuPlugin, #DanmakuLayout canvas { visibility: hidden !important; pointer-events: none !important; }";
 
 let hookedInst = null;
 let hookedBus = null;
@@ -121,19 +127,27 @@ function shouldHide(text, level) {
 
 /**
  * 处理一条弹幕；返回 true 表示由我们接管（原生不再绘制）。
- * 纯图片/礼物流水没有正文，交回原生。
+ * 接管时原生 canvas 已隐藏，文字 / 图片 / 礼物弹幕都由 DOM 层复刻。
  */
 function accept(payload) {
   if (!getSettings().danmakuTakeover) return false;
   const b = extractBarrage(payload);
-  if (!b.text) return false;
-  if (b.isGift) return !!getSettings().simpleMode;
+  if (!b.text && !b.hasImage) return false;
+
+  // 原生 canvas 已被隐藏，礼物/纯图片弹幕也必须由 DOM 层接住，否则会直接丢失
+  if (b.isGift) {
+    if (getSettings().simpleMode) return true;
+    return renderItem(payload, b.content, b.text, b.isSelf, false);
+  }
+  if (!b.text) {
+    return renderItem(payload, b.content, "", b.isSelf, false);
+  }
+
   refreshRules();
   const u = users.get(b.id);
   const level = u ? Number(u.level) : null;
   if (!b.isSelf && shouldHide(b.text, level)) return true;
-  renderItem(payload, b.content, b.text, b.isSelf);
-  return true;
+  return renderItem(payload, b.content, b.text, b.isSelf, true);
 }
 
 function ensureLayer() {
@@ -161,9 +175,9 @@ function makePlusBtn(text) {
   return btn;
 }
 
-function renderItem(payload, parts, text, isSelf = false) {
+function renderItem(payload, parts, text, isSelf = false, allowPlus1 = true) {
   const layer = ensureLayer();
-  if (!layer) return;
+  if (!layer) return false;
   if (layer.childElementCount >= MAX_ITEMS) layer.firstElementChild?.remove();
 
   const fontSize = Number(cfg.fontSize) || 20;
@@ -180,12 +194,13 @@ function renderItem(payload, parts, text, isSelf = false) {
       el.append(img);
     }
   }
-  if (getSettings().plus1) el.append(makePlusBtn(text));
+  if (allowPlus1 && text && getSettings().plus1) el.append(makePlusBtn(text));
   layer.append(el);
 
   const cw = layer.clientWidth || 1;
   const ch = layer.clientHeight || 1;
-  const width = el.offsetWidth;
+  // 图片弹幕在 img 加载完成前 offsetWidth 可能为 0，给一个兜底宽度避免轨道重叠
+  const width = el.offsetWidth || 40;
   const laneH = Math.round(fontSize * 1.5);
   const start = Math.max(0, (Number(cfg.area?.start) || 0.01) * ch);
   const end = Math.min(1, Number(cfg.area?.end) || 0.5) * ch;
@@ -227,6 +242,7 @@ function renderItem(payload, parts, text, isSelf = false) {
   el.addEventListener("mouseleave", () => {
     if (anim.playState === "paused") anim.play();
   });
+  return true;
 }
 
 function clearLayer() {
@@ -234,6 +250,18 @@ function clearLayer() {
   if (layer) layer.replaceChildren();
   lanes = [];
   laneKey = "";
+}
+
+function setNativeHidden(hidden) {
+  const el = document.getElementById(NATIVE_STYLE_ID);
+  if (hidden) {
+    if (!el || el.textContent !== NATIVE_HIDDEN_CSS) {
+      injectStyle(NATIVE_STYLE_ID, NATIVE_HIDDEN_CSS);
+    }
+  } else if (el && el.textContent !== "") {
+    // 关闭接管或无法包装插件时恢复原生 canvas
+    el.textContent = "";
+  }
 }
 
 function tick() {
@@ -247,7 +275,14 @@ function tick() {
       hookedInst = inst;
     }
     hookBus();
-    if (getSettings().danmakuTakeover) ensureLayer();
+    // 只有真正拿到插件实例并完成 send 包装后，才隐藏原生 canvas；
+    // 否则保留原生渲染，避免插件改版时画面一条弹幕都没有。
+    if (getSettings().danmakuTakeover && inst) {
+      ensureLayer();
+      setNativeHidden(true);
+    } else {
+      setNativeHidden(false);
+    }
   } catch (e) {
     /* 页面结构变化时忽略，下次 tick 重试 */
   }
@@ -257,6 +292,12 @@ export function initDanmakuLayer() {
   tick();
   setInterval(tick, 1000);
   onSettingChange((key, value) => {
-    if (key === "danmakuTakeover" && !value) clearLayer();
+    if (key !== "danmakuTakeover") return;
+    if (!value) {
+      clearLayer();
+      setNativeHidden(false);
+    } else {
+      tick();
+    }
   });
 }

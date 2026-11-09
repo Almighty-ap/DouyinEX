@@ -1,11 +1,24 @@
 import { waitFor, injectStyle, sleep } from "../../common/dom.js";
 import { getSettings, setSetting, onSettingChange } from "../../common/settings.js";
+import { win } from "../../common/env.js";
 
 const SIMPLE_CSS = `
 [data-e2e="exhibition-banner"],
 [data-e2e="yellowCart-container"],
 [data-e2e*="cart" i],
-[data-e2e="hour-rank-entrance"] { display: none !important; }
+[data-e2e="hour-rank-entrance"],
+#GiftTrayLayout,
+#GiftEffectLayout,
+.GiftTrayPlugin,
+.GiftEffectPlugin,
+.douyin-player-controls > :not(.douyin-player-controls-inner) { display: none !important; }
+`;
+
+const FULLSCREEN_CLEAN_CSS = `
+.douyin-player-controls > :not(.douyin-player-controls-inner),
+.douyin-player-controls [data-e2e="gifts-container"],
+.douyin-player-controls #giftPanelEntrance,
+.douyin-player-controls [data-e2e="recharge-btn"] { display: none !important; }
 `;
 
 /** 小黄车在播放器工具条里是动态挂载的，data-e2e 也可能随 A/B 变化，
@@ -55,7 +68,126 @@ function findWebFullButton() {
     (el) => el.children.length === 0 && /^网页全屏$/.test(el.textContent.trim())
   );
   const tip = tips[0];
-  return tip ? tip.closest("div[class*='douyin-player'], div") : null;
+  if (!tip) return null;
+  const slot = tip.closest("slot") || tip.parentElement?.parentElement?.parentElement;
+  const svgIcon = slot ? slot.querySelector("svg")?.parentElement : null;
+  return svgIcon || tip.closest("div[class*='douyin-player'], div");
+}
+
+export function isNativeFullscreen() {
+  if (document.fullscreenElement || document.webkitFullscreenElement) return true;
+  // 注意：不要用 living-container 的 __roomInfoBarInner 判断全屏。
+  // 抖音在竖屏直播（stream_orientation=1）、已结束/无流房间也会常驻这个类，
+  // 一旦误判会让悬浮球被全屏自动隐藏逻辑永久置为 is-hidden。
+  const tip = document.querySelector(".douyin-player-fullscreen .douyin-player-popup");
+  if (tip && tip.textContent.includes("退出全屏")) return true;
+  return false;
+}
+
+export function isFullMode() {
+  return isNativeFullscreen();
+}
+
+function isChatFolded() {
+  if (document.querySelector('.chat_room_fold, [class*="chat_room_fold"]')) return true;
+  const rightBg =
+    document.getElementById("RightBackgroundLayout") || document.getElementById("chatroom");
+  if (!rightBg) return false;
+  return rightBg.getBoundingClientRect().width < 20;
+}
+
+function findFoldChatBtn() {
+  const direct = document.querySelector("#RightBackgroundLayout .KH9DQgyz, #chatroom .KH9DQgyz");
+  if (direct) return direct;
+  const aud = document.querySelector(
+    '#RightBackgroundLayout [data-e2e="live-room-audience"], #chatroom [data-e2e="live-room-audience"]'
+  );
+  if (aud && aud.parentElement) {
+    const firstSvgBox = Array.from(aud.parentElement.children).find((el) => el.querySelector("svg"));
+    if (firstSvgBox) return firstSvgBox;
+  }
+  return null;
+}
+
+function findUnfoldChatBtn() {
+  const foldBox = document.querySelector('.chat_room_fold, [class*="chat_room_fold"]');
+  if (!foldBox) return null;
+  return foldBox.querySelector("svg")?.parentElement || foldBox;
+}
+
+let chatFoldedByUs = false;
+let lastFullState = false;
+
+async function foldChatWithRetry() {
+  for (let i = 0; i < 5; i++) {
+    if (!isFullMode() || !getSettings().fullscreenFoldChat) return;
+    if (isChatFolded()) return;
+    const btn = findFoldChatBtn();
+    if (btn) {
+      btn.click();
+      chatFoldedByUs = true;
+      await sleep(250);
+      if (isChatFolded()) return;
+    }
+    await sleep(200);
+  }
+}
+
+async function unfoldChatIfNeeded() {
+  if (!chatFoldedByUs) return;
+  chatFoldedByUs = false;
+  for (let i = 0; i < 4; i++) {
+    if (!isChatFolded()) return;
+    const btn = findUnfoldChatBtn();
+    if (btn) {
+      btn.click();
+      await sleep(250);
+      if (!isChatFolded()) return;
+    }
+    await sleep(200);
+  }
+}
+
+function checkFullscreenChatFold() {
+  const nowFull = isFullMode();
+  if (nowFull && !lastFullState) {
+    lastFullState = true;
+    if (getSettings().fullscreenFoldChat && !isChatFolded()) {
+      foldChatWithRetry();
+    }
+  } else if (!nowFull && lastFullState) {
+    lastFullState = false;
+    unfoldChatIfNeeded();
+  }
+}
+
+let fullChatTimer = null;
+
+function applyFullscreenCleanStyle() {
+  const on = !!getSettings().fullscreenFoldChat;
+  injectStyle("dyex-fullscreen-clean", on ? FULLSCREEN_CLEAN_CSS : "");
+}
+
+export function initFullscreenFoldChat() {
+  if (window.__dyexFullChatTimer) clearInterval(window.__dyexFullChatTimer);
+  applyFullscreenCleanStyle();
+  lastFullState = isFullMode();
+  if (lastFullState && getSettings().fullscreenFoldChat && !isChatFolded()) {
+    foldChatWithRetry();
+  }
+  document.addEventListener("fullscreenchange", checkFullscreenChatFold);
+  document.addEventListener("webkitfullscreenchange", checkFullscreenChatFold);
+  fullChatTimer = setInterval(checkFullscreenChatFold, 500);
+  window.__dyexFullChatTimer = fullChatTimer;
+
+  onSettingChange((key, val) => {
+    if (key !== "fullscreenFoldChat") return;
+    applyFullscreenCleanStyle();
+    if (isFullMode()) {
+      if (val && !isChatFolded()) foldChatWithRetry();
+      else if (!val) unfoldChatIfNeeded();
+    }
+  });
 }
 
 export async function autoWebFull() {
@@ -98,11 +230,26 @@ const GIFT_ICON = '[data-e2e="gift-setting"]';
 const ON_COLOR = "rgb(254, 44, 85)"; // 开关打开时的品牌红；关闭为 rgba(255,255,255,.34)
 
 function hover(el, type) {
-  el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+  const isEnter = type === "mouseover";
+  // 同 Lottery：油猴沙箱里必须用 unsafeWindow（win），否则 PointerEvent 构造会抛错，
+  // 而且这里没有外层 catch，会变成 Uncaught (in promise)。
+  const fire = (Ctor, eventType, opts) => {
+    try {
+      el.dispatchEvent(new Ctor(eventType, opts));
+    } catch (_) {}
+  };
+  const base = { bubbles: true, cancelable: true, view: win };
+  fire(PointerEvent, isEnter ? "pointerover" : "pointerout", base);
+  fire(MouseEvent, type, base);
+  fire(MouseEvent, isEnter ? "mouseenter" : "mouseleave", {
+    bubbles: false,
+    cancelable: false,
+    view: win,
+  });
 }
 
 async function withPopup(selector, fn) {
-  const icon = document.querySelector(selector);
+  const icon = await waitFor(selector, 10000);
   if (!icon) return null;
   hover(icon, "mouseover");
   await sleep(450);
@@ -129,6 +276,16 @@ function danmakuSwitch(text) {
   return row && row.children[1] ? row.children[1].firstElementChild : null;
 }
 
+async function waitForDanmakuSwitch(text, timeout = 2000) {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) {
+    const sw = danmakuSwitch(text);
+    if (sw) return sw;
+    await sleep(100);
+  }
+  return null;
+}
+
 async function setSwitch(sw, want) {
   if (!sw) return null;
   const before = isOn(sw);
@@ -141,8 +298,8 @@ async function setSwitch(sw, want) {
 
 /** 一次性设置「送礼信息 / 福袋口令」；传 null 表示该项不处理；返回点击前后的状态 */
 async function applyDanmakuSwitches(wantGift, wantLucky) {
-  const only = (text, want) =>
-    want === null || want === undefined ? null : setSwitch(danmakuSwitch(text), want);
+  const only = async (text, want) =>
+    want === null || want === undefined ? null : setSwitch(await waitForDanmakuSwitch(text), want);
   return withPopup(DANMAKU_ICON, async () => ({
     gift: await only("送礼信息", wantGift),
     lucky: await only("福袋口令", wantLucky),
@@ -152,7 +309,7 @@ async function applyDanmakuSwitches(wantGift, wantLucky) {
 /** 设置「屏蔽礼物特效」 */
 async function applyEffectSwitch(want) {
   return withPopup(GIFT_ICON, async () =>
-    setSwitch(document.querySelector('[data-e2e="effect-switch"] > div'), want)
+    setSwitch(await waitFor('[data-e2e="effect-switch"] > div', 2000, 100), want)
   );
 }
 
