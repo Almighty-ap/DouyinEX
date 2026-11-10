@@ -64,6 +64,8 @@ function findPlayer() {
 }
 
 let softFullActive = false;
+/** 播放器原型上未被软全屏包装的原生 requestFullscreen，用于有手势时把软全屏升级为真全屏 */
+let nativeRequestFull = null;
 
 function getPlayerProxy() {
   const doc = win.document || document;
@@ -104,6 +106,7 @@ function ensurePlayerFullPatch() {
   } catch (_) {}
 
   if (typeof origReq === "function") {
+    nativeRequestFull = origReq;
     proto.requestFullscreen = function (...args) {
       const p = origReq.apply(this, args);
       if (p && typeof p.then === "function") {
@@ -319,6 +322,28 @@ export function initFullscreenFoldChat() {
   });
 }
 
+/**
+ * 软全屏只是页面铺满视口，浏览器标签页/任务栏仍在。
+ * 用户在软全屏期间的第一次可信点击/按键携带手势，此时可以真正调用原生全屏，把软全屏升级为真全屏。
+ * 排除 Esc（退出软全屏）、H 与「退出全屏」按钮（用户本意是退出），避免请求与退出竞态。
+ */
+function upgradeSoftFull(e) {
+  if (!softFullActive || !e.isTrusted || !nativeRequestFull) return;
+  if (document.fullscreenElement || document.webkitFullscreenElement) return;
+  if (e.type === "keydown" && (e.key === "Escape" || /^h$/i.test(e.key))) return;
+  if (e.target instanceof Element && e.target.closest(".douyin-player-fullscreen")) return;
+  const proxy = getPlayerProxy();
+  if (!proxy) return;
+  try {
+    const p = nativeRequestFull.call(proxy);
+    if (p && typeof p.then === "function") {
+      p.then(() => {
+        if (document.fullscreenElement || document.webkitFullscreenElement) softFullActive = false;
+      }).catch(() => {});
+    }
+  } catch (_) {}
+}
+
 function exitFullIfNeeded() {
   const proxy = ensurePlayerFullPatch();
   if (proxy && isNativeFullscreen() && typeof proxy.exitFullscreen === "function") {
@@ -445,6 +470,7 @@ export function initAutoFullMode() {
         type,
         (e) => {
           if (e.isTrusted) lastUserInputAt = Date.now();
+          upgradeSoftFull(e);
         },
         true
       );

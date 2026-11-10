@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DouyinEX-抖音直播间增强插件
 // @namespace    https://github.com/Almighty-ap/DouyinEX
-// @version      0.1.1
+// @version      0.1.2
 // @description  抖音直播间增强：复制直播流(原画/超清/高清) 自动最高画质 自动网页全屏 全屏净化 滚轮调音量 弹幕接管与屏蔽 弹幕+1 循环发送弹幕 自动抢免费福袋 简洁模式
 // @author       DouyinEX
 // @license      MIT
@@ -397,6 +397,7 @@
     return document.querySelector(".douyin-player");
   }
   var softFullActive = false;
+  var nativeRequestFull = null;
   function getPlayerProxy() {
     const doc = win.document || document;
     const el = doc.querySelector(".douyin-player");
@@ -423,6 +424,7 @@
     } catch (_) {
     }
     if (typeof origReq === "function") {
+      nativeRequestFull = origReq;
       proto.requestFullscreen = function(...args) {
         const p = origReq.apply(this, args);
         if (p && typeof p.then === "function") {
@@ -610,6 +612,24 @@
       }
     });
   }
+  function upgradeSoftFull(e) {
+    if (!softFullActive || !e.isTrusted || !nativeRequestFull) return;
+    if (document.fullscreenElement || document.webkitFullscreenElement) return;
+    if (e.type === "keydown" && (e.key === "Escape" || /^h$/i.test(e.key))) return;
+    if (e.target instanceof Element && e.target.closest(".douyin-player-fullscreen")) return;
+    const proxy = getPlayerProxy();
+    if (!proxy) return;
+    try {
+      const p = nativeRequestFull.call(proxy);
+      if (p && typeof p.then === "function") {
+        p.then(() => {
+          if (document.fullscreenElement || document.webkitFullscreenElement) softFullActive = false;
+        }).catch(() => {
+        });
+      }
+    } catch (_) {
+    }
+  }
   function exitFullIfNeeded() {
     const proxy = ensurePlayerFullPatch();
     if (proxy && isNativeFullscreen() && typeof proxy.exitFullscreen === "function") {
@@ -714,6 +734,7 @@
           type,
           (e) => {
             if (e.isTrusted) lastUserInputAt = Date.now();
+            upgradeSoftFull(e);
           },
           true
         );
