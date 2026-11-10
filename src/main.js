@@ -3,9 +3,12 @@ import { initPanel } from "./packages/Panel/Panel.js";
 import { copyStream, autoHighestQuality } from "./packages/Stream/Stream.js";
 import {
   autoWebFull,
+  autoFull,
+  initAutoFullMode,
   initWheelVolume,
   initSimpleMode,
   initFullscreenFoldChat,
+  initHideGiftBar,
 } from "./packages/Player/Player.js";
 import { initChatShield } from "./packages/Chat/Shield.js";
 import { initDanmakuLayer } from "./packages/Danmaku/Layer.js";
@@ -22,6 +25,8 @@ function main() {
   registerMenu(panel);
   initSimpleMode();
   initFullscreenFoldChat();
+  initHideGiftBar();
+  initAutoFullMode();
   initWheelVolume();
   initChatShield();
   initDanmakuLayer();
@@ -29,7 +34,8 @@ function main() {
 
   const s = getSettings();
   if (s.autoQuality) autoHighestQuality();
-  if (s.autoWebFull) autoWebFull();
+  if (s.autoFull) autoFull();
+  else if (s.autoWebFull) autoWebFull();
 }
 
 if (document.readyState === "loading") {

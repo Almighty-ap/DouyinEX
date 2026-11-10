@@ -1,6 +1,6 @@
 import css from "./Panel.css";
 import { injectStyle } from "../../common/dom.js";
-import { getSettings, setSetting } from "../../common/settings.js";
+import { getSettings, setSetting, onSettingChange } from "../../common/settings.js";
 import { copyStream, getStreamMenuItems, autoHighestQuality } from "../Stream/Stream.js";
 import { startLoop, stopLoop, isLoopRunning, onLoopState } from "../Chat/Loop.js";
 import { isFullMode } from "../Player/Player.js";
@@ -12,7 +12,9 @@ const BALL_SVG = `<svg viewBox="0 0 108 108" xmlns="http://www.w3.org/2000/svg">
 const CHECKS = [
   ["autoQuality", "自动最高画质"],
   ["autoWebFull", "进房自动网页全屏"],
-  ["fullscreenFoldChat", "全屏净化（自动折叠评论区 + 屏蔽底部礼物/充值/游戏栏）"],
+  ["autoFull", "进房自动完全全屏"],
+  ["fullscreenFoldChat", "全屏时自动折叠评论区"],
+  ["hideGiftBar", "隐藏底部礼物栏"],
   ["wheelVolume", "播放器内滚轮调音量"],
   ["simpleMode", "简洁模式（隐藏横幅/小黄车/榜单入口）"],
   ["autoLottery", "自动抢免费福袋（评论/无门槛/看播达标，跳过付费粉丝团）"],
@@ -33,9 +35,9 @@ function buildHtml() {
   <div class="dyex-row" id="dyex-stream-btns"></div>
   <div class="dyex-tip">点击复制地址，可用 PotPlayer / VLC 打开</div>
   <h4>播放与界面</h4>
-  ${CHECKS.slice(0, 7).map(([k, l]) => checkRow(k, l)).join("")}
+  ${CHECKS.slice(0, 9).map(([k, l]) => checkRow(k, l)).join("")}
   <h4>弹幕（画面上漂浮的弹幕）</h4>
-  ${CHECKS.slice(7).map(([k, l]) => checkRow(k, l)).join("")}
+  ${CHECKS.slice(9).map(([k, l]) => checkRow(k, l)).join("")}
   <div class="dyex-row">屏蔽等级低于
     <input type="number" min="0" max="80" data-key="shieldLevelBelow" data-num="1"> 的用户（0=不限）
   </div>
@@ -261,6 +263,13 @@ export function initPanel() {
     if (el.type === "checkbox") setSetting(key, el.checked);
     else if (el.dataset.num) setSetting(key, Number(el.value) || 0);
     else setSetting(key, el.value);
+    syncInputs(panel);
+  });
+
+  onSettingChange((key) => {
+    if (key === "autoFull" || key === "autoWebFull") {
+      syncInputs(panel);
+    }
   });
 
   const loopBtn = panel.querySelector("#dyex-loop-toggle");

@@ -22,7 +22,7 @@
   // src/common/env.js
   var hasGM = typeof GM_getValue === "function";
   var PREFIX = "dyex_";
-  var win = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+  var win = typeof unsafeWindow !== "undefined" ? unsafeWindow : typeof window !== "undefined" ? window : globalThis;
   function getValue(key, def) {
     if (hasGM) return GM_getValue(key, def);
     try {
@@ -34,7 +34,12 @@
   }
   function setValue(key, value) {
     if (hasGM) return GM_setValue(key, value);
-    localStorage.setItem(PREFIX + key, JSON.stringify(value));
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(PREFIX + key, JSON.stringify(value));
+      }
+    } catch {
+    }
   }
   function copyText(text) {
     if (typeof GM_setClipboard === "function") {
@@ -48,7 +53,9 @@
   var DEFAULTS = {
     autoQuality: true,
     autoWebFull: false,
+    autoFull: false,
     fullscreenFoldChat: true,
+    hideGiftBar: false,
     wheelVolume: true,
     simpleMode: false,
     simpleRestore: null,
@@ -67,18 +74,38 @@
     loopLimitMin: 5,
     loopRandom: false
   };
+  var MUTEX_KEY = {
+    autoFull: "autoWebFull",
+    autoWebFull: "autoFull"
+  };
   var listeners = /* @__PURE__ */ new Set();
   var cache = null;
+  function normalizeSettings(raw = {}) {
+    const merged = { ...DEFAULTS, ...raw || {} };
+    if (merged.autoFull && merged.autoWebFull) {
+      merged.autoWebFull = false;
+    }
+    return merged;
+  }
   function load() {
-    if (!cache) cache = { ...DEFAULTS, ...getValue("settings", {}) || {} };
+    if (!cache) cache = normalizeSettings(getValue("settings", {}));
     return cache;
   }
   function getSettings() {
     return load();
   }
   function setSetting(key, value) {
-    load()[key] = value;
+    const s = load();
+    s[key] = value;
+    const peer = value ? MUTEX_KEY[key] : null;
+    const peerChanged = !!(peer && s[peer]);
+    if (peerChanged) {
+      s[peer] = false;
+    }
     setValue("settings", cache);
+    if (peerChanged) {
+      listeners.forEach((fn) => fn(peer, false));
+    }
     listeners.forEach((fn) => fn(key, value));
   }
   function onSettingChange(fn) {
@@ -329,11 +356,12 @@
 .GiftEffectPlugin,
 .douyin-player-controls > :not(.douyin-player-controls-inner) { display: none !important; }
 `;
-  var FULLSCREEN_CLEAN_CSS = `
-.douyin-player-controls > :not(.douyin-player-controls-inner),
-.douyin-player-controls [data-e2e="gifts-container"],
-.douyin-player-controls #giftPanelEntrance,
-.douyin-player-controls [data-e2e="recharge-btn"] { display: none !important; }
+  var HIDE_GIFT_BAR_CSS = `
+#BottomLayout,
+[data-e2e="gifts-container"],
+#giftPanelEntrance,
+[data-e2e="recharge-btn"],
+.douyin-player-controls > :not(.douyin-player-controls-inner) { display: none !important; }
 `;
   var hiddenCart = /* @__PURE__ */ new Set();
   function hideCartNodes() {
@@ -368,9 +396,74 @@
   function findPlayer() {
     return document.querySelector(".douyin-player");
   }
-  function findWebFullButton() {
+  var softFullActive = false;
+  function getPlayerProxy() {
+    const doc = win.document || document;
+    const el = doc.querySelector(".douyin-player");
+    if (!el) return null;
+    const raw = el.wrappedJSObject || el;
+    return raw._player?.proxy || null;
+  }
+  function ensurePlayerFullPatch() {
+    const proxy = getPlayerProxy();
+    if (!proxy) return null;
+    const proto = Object.getPrototypeOf(proxy);
+    if (!proto || proto.__dyexFullPatched) return proxy;
+    const origDesc = Object.getOwnPropertyDescriptor(proto, "fullscreen");
+    const origReq = proto.requestFullscreen;
+    const origExit = proto.exitFullscreen;
+    try {
+      Object.defineProperty(proto, "fullscreen", {
+        configurable: true,
+        get() {
+          if (softFullActive) return true;
+          return origDesc?.get ? origDesc.get.call(this) : !!(document.fullscreenElement || document.webkitFullscreenElement);
+        }
+      });
+    } catch (_) {
+    }
+    if (typeof origReq === "function") {
+      proto.requestFullscreen = function(...args) {
+        const p = origReq.apply(this, args);
+        if (p && typeof p.then === "function") {
+          return p.then((res) => {
+            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+              softFullActive = true;
+              try {
+                this.emit("fullscreenchange", true);
+              } catch (_) {
+              }
+            } else {
+              softFullActive = false;
+            }
+            return res;
+          });
+        }
+        return p;
+      };
+    }
+    if (typeof origExit === "function") {
+      proto.exitFullscreen = function(...args) {
+        if (softFullActive) {
+          softFullActive = false;
+          try {
+            this.emit("fullscreenchange", false);
+          } catch (_) {
+          }
+        }
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+          return origExit.apply(this, args);
+        }
+        return Promise.resolve();
+      };
+    }
+    proto.__dyexFullPatched = true;
+    return proxy;
+  }
+  function findWebFullButton(wantExit = false) {
+    const pattern = wantExit ? /^退出网页全屏$/ : /^网页全屏$/;
     const tips = Array.from(document.querySelectorAll(".douyin-player *")).filter(
-      (el) => el.children.length === 0 && /^网页全屏$/.test(el.textContent.trim())
+      (el) => el.children.length === 0 && pattern.test(el.textContent.trim())
     );
     const tip = tips[0];
     if (!tip) return null;
@@ -378,7 +471,43 @@
     const svgIcon = slot ? slot.querySelector("svg")?.parentElement : null;
     return svgIcon || tip.closest("div[class*='douyin-player'], div");
   }
+  function findFullButton() {
+    if (isNativeFullscreen()) return null;
+    const root = document.querySelector(".douyin-player-fullscreen");
+    if (root) {
+      const pop = root.querySelector(".douyin-player-popup");
+      if (pop && pop.textContent.includes("\u9000\u51FA\u5168\u5C4F")) return null;
+      return root.querySelector("svg") || root.querySelector(".douyin-player-icon") || root;
+    }
+    const tips = Array.from(document.querySelectorAll(".douyin-player *")).filter(
+      (el) => el.children.length === 0 && /^(进入)?全屏(\s*\(H\))?$/i.test(el.textContent.trim())
+    );
+    const tip = tips[0];
+    if (!tip) return null;
+    const slot = tip.closest("slot") || tip.parentElement?.parentElement?.parentElement;
+    return slot && slot.querySelector("svg") || tip.closest("div[class*='douyin-player'], div");
+  }
+  function triggerClick(el) {
+    if (!el) return false;
+    try {
+      el.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          view: win
+        })
+      );
+      return true;
+    } catch (_) {
+      if (typeof el.click === "function") {
+        el.click();
+        return true;
+      }
+    }
+    return false;
+  }
   function isNativeFullscreen() {
+    if (softFullActive) return true;
     if (document.fullscreenElement || document.webkitFullscreenElement) return true;
     const tip = document.querySelector(".douyin-player-fullscreen .douyin-player-popup");
     if (tip && tip.textContent.includes("\u9000\u51FA\u5168\u5C4F")) return true;
@@ -453,13 +582,18 @@
     }
   }
   var fullChatTimer = null;
-  function applyFullscreenCleanStyle() {
-    const on = !!getSettings().fullscreenFoldChat;
-    injectStyle("dyex-fullscreen-clean", on ? FULLSCREEN_CLEAN_CSS : "");
+  function applyHideGiftBarStyle() {
+    const on = !!getSettings().hideGiftBar;
+    injectStyle("dyex-hide-gift-bar", on ? HIDE_GIFT_BAR_CSS : "");
+  }
+  function initHideGiftBar() {
+    applyHideGiftBarStyle();
+    onSettingChange((key) => {
+      if (key === "hideGiftBar") applyHideGiftBarStyle();
+    });
   }
   function initFullscreenFoldChat() {
     if (window.__dyexFullChatTimer) clearInterval(window.__dyexFullChatTimer);
-    applyFullscreenCleanStyle();
     lastFullState = isFullMode();
     if (lastFullState && getSettings().fullscreenFoldChat && !isChatFolded()) {
       foldChatWithRetry();
@@ -470,23 +604,138 @@
     window.__dyexFullChatTimer = fullChatTimer;
     onSettingChange((key, val) => {
       if (key !== "fullscreenFoldChat") return;
-      applyFullscreenCleanStyle();
       if (isFullMode()) {
         if (val && !isChatFolded()) foldChatWithRetry();
         else if (!val) unfoldChatIfNeeded();
       }
     });
   }
-  async function autoWebFull() {
+  function exitFullIfNeeded() {
+    const proxy = ensurePlayerFullPatch();
+    if (proxy && isNativeFullscreen() && typeof proxy.exitFullscreen === "function") {
+      proxy.exitFullscreen();
+      return;
+    }
+    if (softFullActive) {
+      softFullActive = false;
+    }
+    if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
+      document.exitFullscreen().catch(() => {
+      });
+    }
+  }
+  async function autoWebFull(opts = {}) {
+    if (isNativeFullscreen()) {
+      exitFullIfNeeded();
+    }
+    if (opts.immediate) {
+      const immediateBtn = findWebFullButton(false);
+      if (immediateBtn) {
+        immediateBtn.click();
+        return true;
+      }
+    }
     const player = await waitFor(".douyin-player", 2e4);
-    if (!player) return false;
-    await sleep(1500);
-    const btn = findWebFullButton();
+    if (!player || !getSettings().autoWebFull) return false;
+    if (!opts.immediate) await sleep(1500);
+    if (!getSettings().autoWebFull) return false;
+    const btn = findWebFullButton(false);
     if (btn) {
       btn.click();
       return true;
     }
     return false;
+  }
+  async function waitUntil(fn, timeout = 15e3, interval = 200) {
+    const end = Date.now() + timeout;
+    while (Date.now() < end) {
+      if (fn()) return true;
+      await sleep(interval);
+    }
+    return false;
+  }
+  async function tryEnterFull() {
+    const proxy = ensurePlayerFullPatch();
+    const btn = findFullButton();
+    if (btn) triggerClick(btn);
+    else if (proxy && typeof proxy.requestFullscreen === "function") proxy.requestFullscreen();
+    await sleep(300);
+    return isNativeFullscreen();
+  }
+  var fullGuardToken = 0;
+  var lastUserInputAt = 0;
+  function recentUserInput(ms = 1500) {
+    return Date.now() - lastUserInputAt < ms;
+  }
+  async function autoFull(opts = {}) {
+    const token = ++fullGuardToken;
+    const alive = () => token === fullGuardToken && !!getSettings().autoFull;
+    if (isNativeFullscreen()) return true;
+    if (opts.immediate) {
+      if (await tryEnterFull()) {
+        checkFullscreenChatFold();
+        return true;
+      }
+    }
+    if (!await waitFor(".douyin-player", 2e4) || !alive()) return false;
+    const pluginReady = () => !!(findWebFullButton(false) || findWebFullButton(true));
+    await waitUntil(pluginReady, 15e3);
+    if (!opts.immediate) await sleep(800);
+    let entered = false;
+    for (let i = 0; i < 6 && alive(); i++) {
+      if (isNativeFullscreen() || await tryEnterFull()) {
+        entered = true;
+        break;
+      }
+      await sleep(400);
+    }
+    if (!entered) return false;
+    checkFullscreenChatFold();
+    let retries = 0;
+    const guardEnd = Date.now() + 8e3;
+    while (Date.now() < guardEnd && alive()) {
+      await sleep(300);
+      if (isNativeFullscreen()) continue;
+      if (recentUserInput()) break;
+      if (retries >= 3) break;
+      retries++;
+      await sleep(600);
+      if (!alive() || recentUserInput()) break;
+      if (await tryEnterFull()) checkFullscreenChatFold();
+    }
+    return isNativeFullscreen();
+  }
+  var escBound = false;
+  function initAutoFullMode() {
+    if (!escBound) {
+      escBound = true;
+      for (const type of ["pointerdown", "keydown"]) {
+        document.addEventListener(
+          type,
+          (e) => {
+            if (e.isTrusted) lastUserInputAt = Date.now();
+          },
+          true
+        );
+      }
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && softFullActive) {
+          exitFullIfNeeded();
+        }
+      });
+    }
+    onSettingChange((key, val) => {
+      if (key === "autoFull") {
+        if (val) autoFull({ immediate: true });
+        else if (!getSettings().autoWebFull) exitFullIfNeeded();
+      } else if (key === "autoWebFull") {
+        if (val) autoWebFull({ immediate: true });
+        else {
+          const exitBtn = findWebFullButton(true);
+          if (exitBtn) exitBtn.click();
+        }
+      }
+    });
   }
   var wheelBound = false;
   function onWheel(e) {
@@ -628,7 +877,9 @@
   var CHECKS = [
     ["autoQuality", "\u81EA\u52A8\u6700\u9AD8\u753B\u8D28"],
     ["autoWebFull", "\u8FDB\u623F\u81EA\u52A8\u7F51\u9875\u5168\u5C4F"],
-    ["fullscreenFoldChat", "\u5168\u5C4F\u51C0\u5316\uFF08\u81EA\u52A8\u6298\u53E0\u8BC4\u8BBA\u533A + \u5C4F\u853D\u5E95\u90E8\u793C\u7269/\u5145\u503C/\u6E38\u620F\u680F\uFF09"],
+    ["autoFull", "\u8FDB\u623F\u81EA\u52A8\u5B8C\u5168\u5168\u5C4F"],
+    ["fullscreenFoldChat", "\u5168\u5C4F\u65F6\u81EA\u52A8\u6298\u53E0\u8BC4\u8BBA\u533A"],
+    ["hideGiftBar", "\u9690\u85CF\u5E95\u90E8\u793C\u7269\u680F"],
     ["wheelVolume", "\u64AD\u653E\u5668\u5185\u6EDA\u8F6E\u8C03\u97F3\u91CF"],
     ["simpleMode", "\u7B80\u6D01\u6A21\u5F0F\uFF08\u9690\u85CF\u6A2A\u5E45/\u5C0F\u9EC4\u8F66/\u699C\u5355\u5165\u53E3\uFF09"],
     ["autoLottery", "\u81EA\u52A8\u62A2\u514D\u8D39\u798F\u888B\uFF08\u8BC4\u8BBA/\u65E0\u95E8\u69DB/\u770B\u64AD\u8FBE\u6807\uFF0C\u8DF3\u8FC7\u4ED8\u8D39\u7C89\u4E1D\u56E2\uFF09"],
@@ -647,9 +898,9 @@
   <div class="dyex-row" id="dyex-stream-btns"></div>
   <div class="dyex-tip">\u70B9\u51FB\u590D\u5236\u5730\u5740\uFF0C\u53EF\u7528 PotPlayer / VLC \u6253\u5F00</div>
   <h4>\u64AD\u653E\u4E0E\u754C\u9762</h4>
-  ${CHECKS.slice(0, 7).map(([k, l]) => checkRow(k, l)).join("")}
+  ${CHECKS.slice(0, 9).map(([k, l]) => checkRow(k, l)).join("")}
   <h4>\u5F39\u5E55\uFF08\u753B\u9762\u4E0A\u6F02\u6D6E\u7684\u5F39\u5E55\uFF09</h4>
-  ${CHECKS.slice(7).map(([k, l]) => checkRow(k, l)).join("")}
+  ${CHECKS.slice(9).map(([k, l]) => checkRow(k, l)).join("")}
   <div class="dyex-row">\u5C4F\u853D\u7B49\u7EA7\u4F4E\u4E8E
     <input type="number" min="0" max="80" data-key="shieldLevelBelow" data-num="1"> \u7684\u7528\u6237\uFF080=\u4E0D\u9650\uFF09
   </div>
@@ -849,6 +1100,12 @@
       if (el.type === "checkbox") setSetting(key, el.checked);
       else if (el.dataset.num) setSetting(key, Number(el.value) || 0);
       else setSetting(key, el.value);
+      syncInputs(panel);
+    });
+    onSettingChange((key) => {
+      if (key === "autoFull" || key === "autoWebFull") {
+        syncInputs(panel);
+      }
     });
     const loopBtn = panel.querySelector("#dyex-loop-toggle");
     loopBtn.addEventListener("click", () => isLoopRunning() ? stopLoop() : startLoop());
@@ -1760,13 +2017,16 @@
     registerMenu(panel);
     initSimpleMode();
     initFullscreenFoldChat();
+    initHideGiftBar();
+    initAutoFullMode();
     initWheelVolume();
     initChatShield();
     initDanmakuLayer();
     initLottery();
     const s = getSettings();
     if (s.autoQuality) autoHighestQuality();
-    if (s.autoWebFull) autoWebFull();
+    if (s.autoFull) autoFull();
+    else if (s.autoWebFull) autoWebFull();
   }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", main);

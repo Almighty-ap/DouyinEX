@@ -14,11 +14,12 @@ const SIMPLE_CSS = `
 .douyin-player-controls > :not(.douyin-player-controls-inner) { display: none !important; }
 `;
 
-const FULLSCREEN_CLEAN_CSS = `
-.douyin-player-controls > :not(.douyin-player-controls-inner),
-.douyin-player-controls [data-e2e="gifts-container"],
-.douyin-player-controls #giftPanelEntrance,
-.douyin-player-controls [data-e2e="recharge-btn"] { display: none !important; }
+const HIDE_GIFT_BAR_CSS = `
+#BottomLayout,
+[data-e2e="gifts-container"],
+#giftPanelEntrance,
+[data-e2e="recharge-btn"],
+.douyin-player-controls > :not(.douyin-player-controls-inner) { display: none !important; }
 `;
 
 /** 小黄车在播放器工具条里是动态挂载的，data-e2e 也可能随 A/B 变化，
@@ -62,10 +63,90 @@ function findPlayer() {
   return document.querySelector(".douyin-player");
 }
 
+let softFullActive = false;
+
+function getPlayerProxy() {
+  const doc = win.document || document;
+  const el = doc.querySelector(".douyin-player");
+  if (!el) return null;
+  const raw = el.wrappedJSObject || el;
+  return raw._player?.proxy || null;
+}
+
+/**
+ * 抖音完全全屏（H）底层依赖 player._player.proxy.requestFullscreen()。
+ * 在进房自动触发（无用户手势）时，浏览器原生 Element.requestFullscreen() 会被拦截，
+ * 而抖音内部直接吞掉了 reject 导致毫无反应。
+ * 这里对播放器原型挂载软全屏兜底：
+ * - 若有手势（如面板内点击勾选），直接进入浏览器原生全屏；
+ * - 若无手势被浏览器拦截，自动置位 softFullActive 并派发 fullscreenchange(true)，
+ *   使抖音直播间立即进入铺满视口的完全全屏态（顶栏/左栏收起、按钮变为「退出全屏 H」、评论区自动折叠）；
+ * - 点击「退出全屏」、按 H 或按 Esc 时均能正常退出并还原。
+ */
+function ensurePlayerFullPatch() {
+  const proxy = getPlayerProxy();
+  if (!proxy) return null;
+  const proto = Object.getPrototypeOf(proxy);
+  if (!proto || proto.__dyexFullPatched) return proxy;
+
+  const origDesc = Object.getOwnPropertyDescriptor(proto, "fullscreen");
+  const origReq = proto.requestFullscreen;
+  const origExit = proto.exitFullscreen;
+
+  try {
+    Object.defineProperty(proto, "fullscreen", {
+      configurable: true,
+      get() {
+        if (softFullActive) return true;
+        return origDesc?.get ? origDesc.get.call(this) : !!(document.fullscreenElement || document.webkitFullscreenElement);
+      },
+    });
+  } catch (_) {}
+
+  if (typeof origReq === "function") {
+    proto.requestFullscreen = function (...args) {
+      const p = origReq.apply(this, args);
+      if (p && typeof p.then === "function") {
+        return p.then((res) => {
+          if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+            softFullActive = true;
+            try {
+              this.emit("fullscreenchange", true);
+            } catch (_) {}
+          } else {
+            softFullActive = false;
+          }
+          return res;
+        });
+      }
+      return p;
+    };
+  }
+
+  if (typeof origExit === "function") {
+    proto.exitFullscreen = function (...args) {
+      if (softFullActive) {
+        softFullActive = false;
+        try {
+          this.emit("fullscreenchange", false);
+        } catch (_) {}
+      }
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        return origExit.apply(this, args);
+      }
+      return Promise.resolve();
+    };
+  }
+
+  proto.__dyexFullPatched = true;
+  return proxy;
+}
+
 /** 通过 tooltip 文案查找「网页全屏」按钮（原生类名带哈希，文案更稳定） */
-function findWebFullButton() {
+function findWebFullButton(wantExit = false) {
+  const pattern = wantExit ? /^退出网页全屏$/ : /^网页全屏$/;
   const tips = Array.from(document.querySelectorAll(".douyin-player *")).filter(
-    (el) => el.children.length === 0 && /^网页全屏$/.test(el.textContent.trim())
+    (el) => el.children.length === 0 && pattern.test(el.textContent.trim())
   );
   const tip = tips[0];
   if (!tip) return null;
@@ -74,7 +155,50 @@ function findWebFullButton() {
   return svgIcon || tip.closest("div[class*='douyin-player'], div");
 }
 
+/**
+ * 查找「进入全屏」按钮。
+ * 注意：抖音 .douyin-player-fullscreen 的 React onClick 绑定在 <svg> 自身而非外层 div，
+ * 且 SVGElement 没有原生 .click()，触发时必须对 svg 派发冒泡 MouseEvent("click")。
+ */
+function findFullButton() {
+  if (isNativeFullscreen()) return null;
+  const root = document.querySelector(".douyin-player-fullscreen");
+  if (root) {
+    const pop = root.querySelector(".douyin-player-popup");
+    if (pop && pop.textContent.includes("退出全屏")) return null;
+    return root.querySelector("svg") || root.querySelector(".douyin-player-icon") || root;
+  }
+  const tips = Array.from(document.querySelectorAll(".douyin-player *")).filter(
+    (el) => el.children.length === 0 && /^(进入)?全屏(\s*\(H\))?$/i.test(el.textContent.trim())
+  );
+  const tip = tips[0];
+  if (!tip) return null;
+  const slot = tip.closest("slot") || tip.parentElement?.parentElement?.parentElement;
+  return (slot && slot.querySelector("svg")) || tip.closest("div[class*='douyin-player'], div");
+}
+
+function triggerClick(el) {
+  if (!el) return false;
+  try {
+    el.dispatchEvent(
+      new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        view: win,
+      })
+    );
+    return true;
+  } catch (_) {
+    if (typeof el.click === "function") {
+      el.click();
+      return true;
+    }
+  }
+  return false;
+}
+
 export function isNativeFullscreen() {
+  if (softFullActive) return true;
   if (document.fullscreenElement || document.webkitFullscreenElement) return true;
   // 注意：不要用 living-container 的 __roomInfoBarInner 判断全屏。
   // 抖音在竖屏直播（stream_orientation=1）、已结束/无流房间也会常驻这个类，
@@ -163,14 +287,20 @@ function checkFullscreenChatFold() {
 
 let fullChatTimer = null;
 
-function applyFullscreenCleanStyle() {
-  const on = !!getSettings().fullscreenFoldChat;
-  injectStyle("dyex-fullscreen-clean", on ? FULLSCREEN_CLEAN_CSS : "");
+function applyHideGiftBarStyle() {
+  const on = !!getSettings().hideGiftBar;
+  injectStyle("dyex-hide-gift-bar", on ? HIDE_GIFT_BAR_CSS : "");
+}
+
+export function initHideGiftBar() {
+  applyHideGiftBarStyle();
+  onSettingChange((key) => {
+    if (key === "hideGiftBar") applyHideGiftBarStyle();
+  });
 }
 
 export function initFullscreenFoldChat() {
   if (window.__dyexFullChatTimer) clearInterval(window.__dyexFullChatTimer);
-  applyFullscreenCleanStyle();
   lastFullState = isFullMode();
   if (lastFullState && getSettings().fullscreenFoldChat && !isChatFolded()) {
     foldChatWithRetry();
@@ -182,7 +312,6 @@ export function initFullscreenFoldChat() {
 
   onSettingChange((key, val) => {
     if (key !== "fullscreenFoldChat") return;
-    applyFullscreenCleanStyle();
     if (isFullMode()) {
       if (val && !isChatFolded()) foldChatWithRetry();
       else if (!val) unfoldChatIfNeeded();
@@ -190,16 +319,154 @@ export function initFullscreenFoldChat() {
   });
 }
 
-export async function autoWebFull() {
+function exitFullIfNeeded() {
+  const proxy = ensurePlayerFullPatch();
+  if (proxy && isNativeFullscreen() && typeof proxy.exitFullscreen === "function") {
+    proxy.exitFullscreen();
+    return;
+  }
+  if (softFullActive) {
+    softFullActive = false;
+  }
+  if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
+    document.exitFullscreen().catch(() => {});
+  }
+}
+
+export async function autoWebFull(opts = {}) {
+  if (isNativeFullscreen()) {
+    exitFullIfNeeded();
+  }
+  if (opts.immediate) {
+    const immediateBtn = findWebFullButton(false);
+    if (immediateBtn) {
+      immediateBtn.click();
+      return true;
+    }
+  }
   const player = await waitFor(".douyin-player", 20000);
-  if (!player) return false;
-  await sleep(1500);
-  const btn = findWebFullButton();
+  if (!player || !getSettings().autoWebFull) return false;
+  if (!opts.immediate) await sleep(1500);
+  if (!getSettings().autoWebFull) return false;
+  const btn = findWebFullButton(false);
   if (btn) {
     btn.click();
     return true;
   }
   return false;
+}
+
+async function waitUntil(fn, timeout = 15000, interval = 200) {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) {
+    if (fn()) return true;
+    await sleep(interval);
+  }
+  return false;
+}
+
+/** 单次尝试进入完全全屏：优先点原生按钮，找不到再直接调播放器 requestFullscreen */
+async function tryEnterFull() {
+  const proxy = ensurePlayerFullPatch();
+  const btn = findFullButton();
+  if (btn) triggerClick(btn);
+  else if (proxy && typeof proxy.requestFullscreen === "function") proxy.requestFullscreen();
+  await sleep(300);
+  return isNativeFullscreen();
+}
+
+let fullGuardToken = 0;
+let lastUserInputAt = 0;
+
+/** 看门狗要区分「抖音自己退出」和「用户点按钮 / 按 H / 按 Esc 主动退出」，后者不能再拉回全屏 */
+function recentUserInput(ms = 1500) {
+  return Date.now() - lastUserInputAt < ms;
+}
+
+/**
+ * 抖音的「网页全屏」插件（TheaterPlugin）是懒加载的，挂载时会按上次保存的开关状态恢复剧场模式，
+ * 其 onSwitch 在 player.fullscreen 为真时会调用 exitFullscreen()，把刚进入的完全全屏立刻退掉
+ * （实测约在进房 4~5 秒后发生）。所以：
+ * 1. 先等网页全屏按钮出现（插件已挂载）再触发；
+ * 2. 进入后开看门狗，数秒内若被意外退出且选项仍开启，则重试。
+ */
+export async function autoFull(opts = {}) {
+  const token = ++fullGuardToken;
+  const alive = () => token === fullGuardToken && !!getSettings().autoFull;
+
+  if (isNativeFullscreen()) return true;
+
+  if (opts.immediate) {
+    if (await tryEnterFull()) {
+      checkFullscreenChatFold();
+      return true;
+    }
+  }
+
+  if (!(await waitFor(".douyin-player", 20000)) || !alive()) return false;
+  const pluginReady = () => !!(findWebFullButton(false) || findWebFullButton(true));
+  await waitUntil(pluginReady, 15000);
+  if (!opts.immediate) await sleep(800);
+
+  let entered = false;
+  for (let i = 0; i < 6 && alive(); i++) {
+    if (isNativeFullscreen() || (await tryEnterFull())) {
+      entered = true;
+      break;
+    }
+    await sleep(400);
+  }
+  if (!entered) return false;
+  checkFullscreenChatFold();
+
+  // 看门狗：8 秒内被抖音自己退出全屏则重试（最多 3 次）
+  let retries = 0;
+  const guardEnd = Date.now() + 8000;
+  while (Date.now() < guardEnd && alive()) {
+    await sleep(300);
+    if (isNativeFullscreen()) continue;
+    if (recentUserInput()) break;
+    if (retries >= 3) break;
+    retries++;
+    await sleep(600);
+    if (!alive() || recentUserInput()) break;
+    if (await tryEnterFull()) checkFullscreenChatFold();
+  }
+  return isNativeFullscreen();
+}
+
+let escBound = false;
+
+export function initAutoFullMode() {
+  if (!escBound) {
+    escBound = true;
+    for (const type of ["pointerdown", "keydown"]) {
+      document.addEventListener(
+        type,
+        (e) => {
+          if (e.isTrusted) lastUserInputAt = Date.now();
+        },
+        true
+      );
+    }
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && softFullActive) {
+        exitFullIfNeeded();
+      }
+    });
+  }
+  onSettingChange((key, val) => {
+    if (key === "autoFull") {
+      if (val) autoFull({ immediate: true });
+      else if (!getSettings().autoWebFull) exitFullIfNeeded();
+    } else if (key === "autoWebFull") {
+      if (val) autoWebFull({ immediate: true });
+      else {
+        const exitBtn = findWebFullButton(true);
+        if (exitBtn) exitBtn.click();
+      }
+    }
+  });
 }
 
 let wheelBound = false;
