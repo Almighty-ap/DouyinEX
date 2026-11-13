@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         DouyinEX-抖音直播间增强插件
 // @namespace    https://github.com/Almighty-ap/DouyinEX
-// @version      0.1.2
-// @description  抖音直播间增强：复制直播流(原画/超清/高清) 自动最高画质 自动网页全屏 全屏净化 滚轮调音量 弹幕接管与屏蔽 弹幕+1 循环发送弹幕 自动抢免费福袋 简洁模式
+// @version      0.1.3
+// @description  抖音直播间增强：复制直播流(原画/超清/高清) 自动最高画质 网页全屏/完全全屏 全屏净化 同步时间 滚轮调音量 弹幕接管与屏蔽 弹幕+1 弹幕收藏 循环发送弹幕 自动抢免费福袋 简洁模式
 // @author       DouyinEX
 // @license      MIT
 // @homepageURL  https://github.com/Almighty-ap/DouyinEX
@@ -49,6 +49,91 @@
     return navigator.clipboard.writeText(text);
   }
 
+  // src/lib/barrage.js
+  function extractBarrage(params) {
+    const content = Array.isArray(params && params.content) ? params.content : [];
+    const text = content.filter((c) => c && c.type === "text").map((c) => String(c.text == null ? "" : c.text)).join("").trim();
+    const hasImage = content.some((c) => c && c.type === "image");
+    return {
+      id: String(params && params.id || ""),
+      text,
+      hasImage,
+      // 自己发的弹幕带边框，不应被屏蔽规则误伤
+      isSelf: !!(params && params.borderWidth),
+      // 画面上的送礼流水弹幕（如「xxx 送出粉丝团灯牌 x 1」），不应挂 +1 跟发按钮
+      isGift: hasImage && /\s*送出.+\sx\s*\d+$/i.test(text),
+      content
+    };
+  }
+  var DM_AREAS = [
+    { key: "top", label: "\u9876\u90E8 1/4", start: 0, end: 0.25 },
+    { key: "half", label: "\u4E0A\u534A\u5C4F", start: 0, end: 0.5 },
+    { key: "upper75", label: "\u4E0A 3/4", start: 0, end: 0.75 },
+    { key: "full", label: "\u5168\u5C4F", start: 0, end: 1 },
+    { key: "bottomHalf", label: "\u4E0B\u534A\u5C4F", start: 0.5, end: 1 }
+  ];
+  var DM_AREA_DEFAULT = "half";
+  function resolveArea(key) {
+    return DM_AREAS.find((a) => a.key === key) || DM_AREAS.find((a) => a.key === DM_AREA_DEFAULT);
+  }
+  var DM_SPEED_DEFAULT = 5;
+  var DM_SPEED_MIN = 1;
+  var DM_SPEED_MAX = 10;
+  var DM_SPEED_MS_MIN = 2e3;
+  var DM_SPEED_MS_MAX = 6e4;
+  var DM_SPEED_MS_DEFAULT = 14400;
+  function clampSpeedMs(ms, fallback = DM_SPEED_MS_DEFAULT) {
+    const n = Number(ms);
+    if (!Number.isFinite(n) || n <= 0) return fallback;
+    return Math.min(DM_SPEED_MS_MAX, Math.max(DM_SPEED_MS_MIN, Math.round(n)));
+  }
+  var SPEED_PPS = [96, 132, 168, 204, 240, 288, 348, 420, 504, 600];
+  function speedLevelToPps(level) {
+    const n = Math.round(Number(level));
+    const lv = Number.isFinite(n) ? Math.min(DM_SPEED_MAX, Math.max(DM_SPEED_MIN, n)) : DM_SPEED_DEFAULT;
+    return SPEED_PPS[lv - 1];
+  }
+  function getLaneCount({ height, channelHeight, maxHeightRate }) {
+    if (!height || !channelHeight) return 1;
+    const usable = Math.min(height, (maxHeightRate || 1) * height);
+    return Math.max(1, Math.floor(usable / channelHeight));
+  }
+
+  // src/lib/favorites.js
+  var FAV_MAX = 300;
+  function normalizeFavorites(raw) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const item of Array.isArray(raw) ? raw : []) {
+      if (typeof item !== "string") continue;
+      const text = item.replace(/\s+/g, " ").trim();
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      out.push(text);
+      if (out.length >= FAV_MAX) break;
+    }
+    return out;
+  }
+  function hasFavorite(list, text) {
+    return normalizeFavorites(list).includes(String(text == null ? "" : text).trim());
+  }
+  function addFavorite(list, text) {
+    const cur = normalizeFavorites(list);
+    const value = String(text == null ? "" : text).replace(/\s+/g, " ").trim();
+    if (!value || cur.includes(value)) return cur;
+    return [value, ...cur].slice(0, FAV_MAX);
+  }
+  function removeFavorite(list, text) {
+    const value = String(text == null ? "" : text).trim();
+    return normalizeFavorites(list).filter((t) => t !== value);
+  }
+  function filterFavorites(list, query) {
+    const cur = normalizeFavorites(list);
+    const q = String(query == null ? "" : query).trim().toLowerCase();
+    if (!q) return cur;
+    return cur.filter((t) => t.toLowerCase().includes(q));
+  }
+
   // src/common/settings.js
   var DEFAULTS = {
     autoQuality: true,
@@ -64,6 +149,12 @@
     ballPos: null,
     plus1: true,
     danmakuTakeover: true,
+    // 画面悬浮弹幕外观（接管渲染时生效，默认值与抖音原生一致）
+    dmFontSize: 20,
+    dmOpacity: 80,
+    dmSpeed: DM_SPEED_DEFAULT,
+    dmArea: DM_AREA_DEFAULT,
+    dmFavorites: [],
     shieldKeywords: "",
     shieldLevelBelow: 0,
     shieldEnter: false,
@@ -80,11 +171,22 @@
   };
   var listeners = /* @__PURE__ */ new Set();
   var cache = null;
+  var AREA_KEYS = new Set(DM_AREAS.map((a) => a.key));
+  function clampNum(value, min, max, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, Math.round(n)));
+  }
   function normalizeSettings(raw = {}) {
     const merged = { ...DEFAULTS, ...raw || {} };
     if (merged.autoFull && merged.autoWebFull) {
       merged.autoWebFull = false;
     }
+    merged.dmFontSize = clampNum(merged.dmFontSize, 12, 40, DEFAULTS.dmFontSize);
+    merged.dmOpacity = clampNum(merged.dmOpacity, 20, 100, DEFAULTS.dmOpacity);
+    merged.dmSpeed = clampNum(merged.dmSpeed, DM_SPEED_MIN, DM_SPEED_MAX, DM_SPEED_DEFAULT);
+    if (!AREA_KEYS.has(merged.dmArea)) merged.dmArea = DM_AREA_DEFAULT;
+    merged.dmFavorites = normalizeFavorites(merged.dmFavorites);
     return merged;
   }
   function load() {
@@ -114,7 +216,7 @@
   }
 
   // src/packages/Panel/Panel.css
-  var Panel_default = '#dyex-ball {\n  position: fixed; right: 16px; bottom: 200px; width: 40px; height: 40px;\n  border-radius: 50%; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.35);\n  cursor: grab; touch-action: none; z-index: 2147483000; display: flex; align-items: center;\n  justify-content: center; user-select: none; transition: transform .15s, opacity .2s;\n}\n#dyex-ball:hover { transform: scale(1.1); }\n#dyex-ball.is-dragging { cursor: grabbing; transition: none; transform: scale(1.08); }\n#dyex-ball.is-hidden { opacity: 0 !important; pointer-events: none !important; transform: scale(.75); }\n#dyex-ball svg { width: 30px; height: 30px; pointer-events: none; }\n\n#dyex-panel {\n  position: fixed; right: 64px; bottom: 80px; width: 340px; max-height: 70vh;\n  overflow-y: auto; background: rgba(22,22,26,.96); color: #eee; font-size: 13px;\n  border-radius: 10px; padding: 12px 14px; z-index: 2147483000;\n  box-shadow: 0 6px 24px rgba(0,0,0,.5); display: none; line-height: 1.6;\n}\n#dyex-panel.is-open { display: block; }\n#dyex-panel h4 { margin: 10px 0 6px; font-size: 13px; color: #fe2c55; }\n#dyex-panel h4:first-child { margin-top: 0; }\n#dyex-panel label { display: flex; align-items: center; gap: 6px; cursor: pointer; }\n#dyex-panel input[type="text"], #dyex-panel input[type="number"], #dyex-panel textarea {\n  background: #2a2a30; color: #eee; border: 1px solid #444; border-radius: 4px;\n  padding: 3px 6px; font-size: 12px; box-sizing: border-box;\n}\n#dyex-panel textarea { width: 100%; resize: vertical; min-height: 56px; }\n#dyex-panel input[type="number"] { width: 64px; }\n#dyex-panel button {\n  background: #fe2c55; color: #fff; border: 0; border-radius: 4px;\n  padding: 3px 10px; font-size: 12px; cursor: pointer; margin: 2px 4px 2px 0;\n}\n#dyex-panel button.is-secondary { background: #3a3a42; }\n#dyex-panel .dyex-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; flex-wrap: wrap; }\n#dyex-panel .dyex-tip { color: #999; font-size: 12px; }\n\n.dyex-plus1 {\n  margin-left: 8px; padding: 0 6px; border-radius: 8px; font-size: 12px;\n  color: #fe2c55; border: 1px solid #fe2c55; cursor: pointer; opacity: 0;\n  transition: opacity .15s; user-select: none; display: inline-block;\n}\n.webcast-chatroom___item:hover .dyex-plus1 { opacity: 1; }\n\n/* \u63A5\u7BA1\u540E\u7684\u60AC\u6D6E\u5F39\u5E55\u5C42 */\n#dyex-dm-layer {\n  position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1;\n}\n.dyex-dm-item {\n  position: absolute; left: 0; top: 0; white-space: nowrap; pointer-events: auto;\n  user-select: none; line-height: 1.35; opacity: .85; cursor: default;\n  text-shadow: -1px -1px 0 rgba(0,0,0,.8), 1px -1px 0 rgba(0,0,0,.8),\n    -1px 1px 0 rgba(0,0,0,.8), 1px 1px 0 rgba(0,0,0,.8), 0 0 2px rgba(0,0,0,.8);\n}\n.dyex-dm-item img { height: 1.15em; vertical-align: -.2em; }\n.dyex-dm-item.is-self {\n  border: 1px solid rgba(255,255,255,.85); border-radius: 6px; padding: 0 6px;\n}\n.dyex-dm-plus1 {\n  display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 8px;\n  background: #fe2c55; color: #fff; font-size: 12px; line-height: 18px;\n  vertical-align: 2px; text-shadow: none; cursor: pointer; opacity: 0;\n  transition: opacity .15s;\n}\n.dyex-dm-item:hover .dyex-dm-plus1 { opacity: 1; }\n\n#dyex-toast {\n  position: fixed; left: 50%; top: 80px; transform: translateX(-50%);\n  padding: 8px 16px; border-radius: 6px; background: rgba(0,0,0,.85); color: #fff;\n  font-size: 13px; z-index: 2147483647; opacity: 0; pointer-events: none;\n  transition: opacity .2s;\n}\n#dyex-toast.is-show { opacity: 1; }\n#dyex-toast[data-type="success"] { background: rgba(22,163,74,.92); }\n#dyex-toast[data-type="error"] { background: rgba(220,38,38,.92); }\n';
+  var Panel_default = '#dyex-ball {\n  position: fixed; right: 16px; bottom: 200px; width: 40px; height: 40px;\n  border-radius: 50%; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.35);\n  cursor: grab; touch-action: none; z-index: 2147483000; display: flex; align-items: center;\n  justify-content: center; user-select: none; transition: transform .15s, opacity .2s;\n}\n#dyex-ball:hover { transform: scale(1.1); }\n#dyex-ball.is-dragging { cursor: grabbing; transition: none; transform: scale(1.08); }\n#dyex-ball.is-hidden { opacity: 0 !important; pointer-events: none !important; transform: scale(.75); }\n#dyex-ball svg { width: 30px; height: 30px; pointer-events: none; }\n\n#dyex-panel {\n  position: fixed; right: 64px; bottom: 80px; width: 340px; max-height: 70vh;\n  overflow-y: auto; background: rgba(22,22,26,.96); color: #eee; font-size: 13px;\n  border-radius: 10px; padding: 12px 14px; z-index: 2147483000;\n  box-shadow: 0 6px 24px rgba(0,0,0,.5); display: none; line-height: 1.6;\n}\n#dyex-panel.is-open { display: block; }\n#dyex-panel h4 { margin: 10px 0 6px; font-size: 13px; color: #fe2c55; }\n#dyex-panel h4:first-child { margin-top: 0; }\n#dyex-panel h4.dyex-fold { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }\n#dyex-panel .dyex-fold-arrow { display: inline-block; transition: transform .15s; }\n#dyex-panel h4.dyex-fold.is-open .dyex-fold-arrow { transform: rotate(90deg); }\n#dyex-panel .dyex-fold-body { display: none; }\n#dyex-panel .dyex-fold-body.is-open { display: block; }\n#dyex-panel label { display: flex; align-items: center; gap: 6px; cursor: pointer; }\n#dyex-panel input[type="text"], #dyex-panel input[type="number"], #dyex-panel textarea {\n  background: #2a2a30; color: #eee; border: 1px solid #444; border-radius: 4px;\n  padding: 3px 6px; font-size: 12px; box-sizing: border-box;\n}\n#dyex-panel textarea { width: 100%; resize: vertical; min-height: 56px; }\n#dyex-panel input[type="number"] { width: 64px; }\n#dyex-panel button {\n  background: #fe2c55; color: #fff; border: 0; border-radius: 4px;\n  padding: 3px 10px; font-size: 12px; cursor: pointer; margin: 2px 4px 2px 0;\n}\n#dyex-panel button.is-secondary { background: #3a3a42; }\n#dyex-panel .dyex-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; flex-wrap: wrap; }\n#dyex-panel .dyex-tip { color: #999; font-size: 12px; }\n#dyex-panel .dyex-grow { flex: 1; min-width: 0; }\n#dyex-panel input[type="range"] { width: 108px; accent-color: #fe2c55; }\n#dyex-panel .dyex-val { color: #fe2c55; min-width: 76px; font-size: 12px; }\n#dyex-panel select {\n  background: #2a2a30; color: #eee; border: 1px solid #444; border-radius: 4px;\n  padding: 3px 6px; font-size: 12px; box-sizing: border-box;\n}\n#dyex-panel .dyex-fav-list { max-height: 168px; overflow-y: auto; margin: 4px 0; }\n#dyex-panel .dyex-fav-item {\n  display: flex; align-items: center; gap: 6px; padding: 2px 0;\n  border-bottom: 1px solid #333;\n}\n#dyex-panel .dyex-fav-text {\n  flex: 1; min-width: 0; cursor: pointer; overflow: hidden;\n  text-overflow: ellipsis; white-space: nowrap;\n}\n#dyex-panel .dyex-fav-text:hover { color: #fe2c55; }\n#dyex-panel .dyex-fav-item button { padding: 1px 6px; font-size: 11px; margin: 0; }\n\n/* \u804A\u5929\u6761\u76EE\u7684\u60AC\u505C\u6309\u94AE\uFF1A\u7EDD\u5BF9\u5B9A\u4F4D\uFF0C\u4E0D\u53C2\u4E0E\u6761\u76EE\u6392\u7248\u3002\n   \u82E5\u6309\u884C\u5185\u5143\u7D20\u63D2\u5165\uFF0C\u6BCF\u6761\u6D88\u606F\u4F1A\u88AB\u6491\u9AD8\u4E00\u884C\uFF08\u5B9E\u6D4B\u5355\u884C\u6761\u76EE 34px \u2192 56px\uFF09\uFF0C\n   \u811A\u672C\u9010\u6761\u6CE8\u5165\u65F6\u5217\u8868\u5185\u5BB9\u4F1A\u6301\u7EED\u8DF3\u52A8\uFF0C\u53EF\u89C6\u6761\u6570\u4E5F\u51E0\u4E4E\u5C11\u4E00\u534A\u3002 */\n.webcast-chatroom___item { position: relative; }\n.dyex-plus1, .dyex-fav {\n  position: absolute; top: 50%; transform: translateY(-50%);\n  margin: 0; padding: 0 6px; border-radius: 8px; font-size: 12px; line-height: 18px;\n  white-space: nowrap; background: #fff;\n  border: 1px solid #fe2c55; color: #fe2c55; cursor: pointer; opacity: 0;\n  transition: opacity .15s; user-select: none;\n}\n.dyex-plus1 { right: 48px; }\n.dyex-fav { right: 4px; border-color: #f5a623; color: #f5a623; }\n.webcast-chatroom___item:hover .dyex-plus1, .webcast-chatroom___item:hover .dyex-fav {\n  opacity: 1;\n}\n\n/* \u63A5\u7BA1\u540E\u7684\u60AC\u6D6E\u5F39\u5E55\u5C42 */\n#dyex-dm-layer {\n  position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1;\n}\n.dyex-dm-item {\n  position: absolute; left: 0; top: 0; white-space: nowrap; pointer-events: auto;\n  user-select: none; line-height: 1.35; cursor: default;\n  text-shadow: -1px -1px 0 rgba(0,0,0,.8), 1px -1px 0 rgba(0,0,0,.8),\n    -1px 1px 0 rgba(0,0,0,.8), 1px 1px 0 rgba(0,0,0,.8), 0 0 2px rgba(0,0,0,.8);\n}\n.dyex-dm-item img { height: 1.15em; vertical-align: -.2em; }\n.dyex-dm-item.is-self {\n  border: 1px solid rgba(255,255,255,.85); border-radius: 6px; padding: 0 6px;\n}\n/* \u60AC\u505C\u4E2D\u7684\u5F39\u5E55\uFF1A\u7F6E\u9876\u5E76\u52A0\u5E95\u8272\uFF0C\u4FDD\u8BC1 +1 / \u6536\u85CF \u59CB\u7EC8\u70B9\u5728\u6700\u521D\u60F3\u64CD\u4F5C\u7684\u90A3\u4E00\u6761\u4E0A\u3002\n   \u60AC\u505C\u671F\u95F4\u5176\u4F59\u5F39\u5E55\u4E0D\u53C2\u4E0E\u547D\u4E2D\u6D4B\u8BD5\uFF0C\u540E\u98D8\u6765\u7684\u5F39\u5E55\u65E2\u76D6\u4E0D\u4F4F\u5B83\u4E5F\u62A2\u4E0D\u8D70\u60AC\u505C\u3002 */\n.dyex-dm-item.is-hover {\n  z-index: 2; background: rgba(0,0,0,.45); border-radius: 6px; padding: 0 6px;\n}\n#dyex-dm-layer.is-hovering .dyex-dm-item { pointer-events: none; }\n#dyex-dm-layer.is-hovering .dyex-dm-item.is-hover { pointer-events: auto; }\n.dyex-dm-plus1, .dyex-dm-fav {\n  display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 8px;\n  color: #fff; font-size: 12px; line-height: 18px; vertical-align: 2px;\n  text-shadow: none; cursor: pointer; opacity: 0; pointer-events: none;\n  transition: opacity .15s;\n}\n.dyex-dm-plus1 { background: #fe2c55; }\n.dyex-dm-fav { background: #f5a623; }\n.dyex-dm-item:hover .dyex-dm-plus1, .dyex-dm-item:hover .dyex-dm-fav,\n.dyex-dm-item.is-hover .dyex-dm-plus1, .dyex-dm-item.is-hover .dyex-dm-fav {\n  opacity: 1; pointer-events: auto;\n}\n\n#dyex-toast {\n  position: fixed; left: 50%; top: 80px; transform: translateX(-50%);\n  padding: 8px 16px; border-radius: 6px; background: rgba(0,0,0,.85); color: #fff;\n  font-size: 13px; z-index: 2147483647; opacity: 0; pointer-events: none;\n  transition: opacity .2s;\n}\n#dyex-toast.is-show { opacity: 1; }\n#dyex-toast[data-type="success"] { background: rgba(22,163,74,.92); }\n#dyex-toast[data-type="error"] { background: rgba(220,38,38,.92); }\n';
 
   // src/common/dom.js
   function sleep(ms) {
@@ -283,6 +385,11 @@
     document.execCommand("selectAll", false);
     return document.execCommand("insertText", false, text);
   }
+  function fillChat(text) {
+    const input = findChatInput();
+    if (!input) return false;
+    return fillEditor(input, text);
+  }
   async function sendChat(text) {
     const input = findChatInput();
     if (!input) return false;
@@ -354,6 +461,12 @@
 #GiftEffectLayout,
 .GiftTrayPlugin,
 .GiftEffectPlugin,
+/* \u753B\u9762\u5185\u7684\u63A8\u5E7F / \u77ED\u89E6\u5361\u7247\uFF08\u53F3\u4E0B\u89D2\u6E38\u620F\u94FE\u63A5\u3001\u6D3B\u52A8\u5361\u7247\u7B49\uFF09\uFF0C\u90E8\u5206\u7531 iframe \u5BB9\u5668\u6E32\u67D3 */
+#EcmoCardLayout,
+#ShortTouchLayout,
+#__living_right_panel_id,
+iframe[data-container-id^="@annie/"],
+.tab-microgame,
 .douyin-player-controls > :not(.douyin-player-controls-inner) { display: none !important; }
 `;
   var HIDE_GIFT_BAR_CSS = `
@@ -362,6 +475,45 @@
 #giftPanelEntrance,
 [data-e2e="recharge-btn"],
 .douyin-player-controls > :not(.douyin-player-controls-inner) { display: none !important; }
+`;
+  var SYNC_TIME_CSS = `
+.dyex-sync-time {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  margin-left: 8px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: .88;
+  /* \u539F\u751F\u63A7\u5236\u680F\u6574\u4F53\u4E3A pointer-events:none\uFF0C\u4EA4\u4E92\u9879\u5404\u81EA\u7F6E\u4E3A auto */
+  pointer-events: auto;
+  transition: opacity .15s, transform .1s;
+  -webkit-tap-highlight-color: transparent;
+}
+.dyex-sync-time:hover { opacity: 1; }
+.dyex-sync-time:active { transform: scale(.9); }
+.dyex-sync-time svg { width: 22px; height: 22px; display: block; }
+.dyex-sync-time::after {
+  content: "\u540C\u6B65\u65F6\u95F4";
+  position: absolute;
+  left: 50%;
+  bottom: 40px;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, .78);
+  color: #fff;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s;
+}
+.dyex-sync-time:hover::after { opacity: 1; }
 `;
   var hiddenCart = /* @__PURE__ */ new Set();
   function hideCartNodes() {
@@ -774,6 +926,77 @@
     wheelBound = true;
     document.addEventListener("wheel", onWheel, { passive: false, capture: true });
   }
+  var SYNC_ICON = `
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <path d="M938.1888 534.016h-80.7936c0.4096-7.3728 0.6144-14.6432 0.6144-22.016 0-218.624-176.8448-400.7936-389.12-400.7936C257.024 111.2064 80.6912 293.1712 80.6912 512c0 218.7264 176.4352 400.7936 388.1984 400.7936 74.752 0 149.0944-22.016 208.1792-60.0064l42.7008 68.608c-75.0592 48.9472-161.9968 74.8544-250.7776 74.752C209.8176 996.1472 0 779.264 0 512S209.8176 27.8528 468.8896 27.8528C728.3712 27.8528 938.7008 244.736 938.7008 512c0 7.3728-0.2048 14.6432-0.512 22.016z m-26.4192-158.1056L426.7008 556.032V291.9424h64v226.5088L689.5616 635.904l-38.912 58.7776z m245.3504-6.656L768 512h256L896 688.0256z" fill="#fff"/>
+</svg>`;
+  function findRefreshSlot(left) {
+    if (!left) return null;
+    const byText = Array.from(left.children).find(
+      (el) => (el.textContent || "").trim().startsWith("\u5237\u65B0")
+    );
+    if (byText) return byText;
+    const second = left.children[1];
+    return second && second.querySelector("svg") ? second : null;
+  }
+  function createSyncTimeButton() {
+    const btn = document.createElement("div");
+    btn.className = "dyex-sync-time";
+    btn.setAttribute("role", "button");
+    btn.setAttribute("aria-label", "\u540C\u6B65\u65F6\u95F4");
+    btn.innerHTML = SYNC_ICON;
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      syncToLive();
+    });
+    return btn;
+  }
+  function ensureSyncTimeButton() {
+    const left = document.querySelector(".douyin-player-controls-left");
+    if (!left) return false;
+    const slot = findRefreshSlot(left);
+    if (!slot) return false;
+    const existing = left.querySelector(".dyex-sync-time");
+    if (existing) {
+      if (existing.previousElementSibling !== slot) slot.insertAdjacentElement("afterend", existing);
+      return true;
+    }
+    slot.insertAdjacentElement("afterend", createSyncTimeButton());
+    return true;
+  }
+  var lastSyncAt = 0;
+  function syncToLive() {
+    if (Date.now() - lastSyncAt < 1500) return false;
+    lastSyncAt = Date.now();
+    const proxy = getPlayerProxy();
+    if (proxy && typeof proxy.refresh === "function") {
+      try {
+        proxy.refresh();
+        return true;
+      } catch (_) {
+      }
+    }
+    const slot = findRefreshSlot(document.querySelector(".douyin-player-controls-left"));
+    const refreshIcon = slot && (slot.querySelector("svg") || slot);
+    if (refreshIcon && triggerClick(refreshIcon)) return true;
+    const video = document.querySelector(".douyin-player video");
+    if (video && video.buffered && video.buffered.length) {
+      try {
+        video.currentTime = video.buffered.end(video.buffered.length - 1);
+        return true;
+      } catch (_) {
+      }
+    }
+    return false;
+  }
+  var syncTimer = null;
+  function initSyncTime() {
+    injectStyle("dyex-sync-time", SYNC_TIME_CSS);
+    ensureSyncTimeButton();
+    clearInterval(syncTimer);
+    syncTimer = setInterval(ensureSyncTimeButton, 1200);
+  }
   var DANMAKU_ICON = '[data-e2e="danmaku-setting-icon"]';
   var GIFT_ICON = '[data-e2e="gift-setting"]';
   var ON_COLOR = "rgb(254, 44, 85)";
@@ -913,6 +1136,7 @@
   function checkRow(key, label) {
     return `<label><input type="checkbox" data-key="${key}"> ${label}</label>`;
   }
+  var favOpen = false;
   function buildHtml() {
     return `
   <h4>\u76F4\u64AD\u6D41</h4>
@@ -922,12 +1146,27 @@
   ${CHECKS.slice(0, 9).map(([k, l]) => checkRow(k, l)).join("")}
   <h4>\u5F39\u5E55\uFF08\u753B\u9762\u4E0A\u6F02\u6D6E\u7684\u5F39\u5E55\uFF09</h4>
   ${CHECKS.slice(9).map(([k, l]) => checkRow(k, l)).join("")}
+  <div class="dyex-tip">\u753B\u9762\u5F39\u5E55\u7684\u5B57\u53F7 / \u4E0D\u900F\u660E\u5EA6 / \u663E\u793A\u533A\u57DF / \u79FB\u52A8\u901F\u5EA6\u5DF2\u6539\u4E3A\u8DDF\u968F\u6296\u97F3\u81EA\u5E26\u7684\u300C\u5F39\u5E55\u8BBE\u7F6E\u300D\u9762\u677F\u2014\u2014\u63A5\u7BA1\u5F00\u542F\u65F6\u6309\u539F\u751F\u8BBE\u7F6E\u6E32\u67D3\uFF0C\u8FD9\u91CC\u4E0D\u518D\u91CD\u590D\u914D\u7F6E</div>
   <div class="dyex-row">\u5C4F\u853D\u7B49\u7EA7\u4F4E\u4E8E
     <input type="number" min="0" max="80" data-key="shieldLevelBelow" data-num="1"> \u7684\u7528\u6237\uFF080=\u4E0D\u9650\uFF09
   </div>
   <div class="dyex-tip">\u5173\u952E\u8BCD\u5C4F\u853D\uFF08\u4E00\u884C\u4E00\u6761\uFF0C/\u6B63\u5219/ \u4EA6\u53EF\uFF09</div>
   <textarea data-key="shieldKeywords" placeholder="\u4F8B\u5982\uFF1A\u5237\u5C4F&#10;/^6{3,}$/"></textarea>
   <div class="dyex-tip">\u4EE5\u4E0B\u5C4F\u853D\u540C\u65F6\u4F5C\u7528\u4E8E\u753B\u9762\u60AC\u6D6E\u5F39\u5E55\u4E0E\u53F3\u4FA7\u804A\u5929\u5217\u8868</div>
+  <h4 class="dyex-fold" id="dyex-fav-toggle">
+    <span class="dyex-fold-arrow">\u25B8</span>\u5F39\u5E55\u6536\u85CF
+    <span class="dyex-tip" id="dyex-fav-count"></span>
+  </h4>
+  <div class="dyex-fold-body" id="dyex-fav-body">
+    <div class="dyex-row"><input type="text" class="dyex-grow" id="dyex-fav-search" placeholder="\u641C\u7D22\u6536\u85CF"></div>
+    <div class="dyex-row">
+      <input type="text" class="dyex-grow" id="dyex-fav-new" placeholder="\u624B\u52A8\u6DFB\u52A0\u4E00\u6761\u6536\u85CF">
+      <button id="dyex-fav-add">\u6DFB\u52A0</button>
+    </div>
+    <div class="dyex-fav-list" id="dyex-fav-list"></div>
+    <div class="dyex-row"><button class="is-secondary" id="dyex-fav-clear">\u6E05\u7A7A\u6536\u85CF</button></div>
+    <div class="dyex-tip">\u60AC\u505C\u753B\u9762\u5F39\u5E55\u6216\u53F3\u4FA7\u804A\u5929\u6761\u76EE\u70B9\u300C\u6536\u85CF\u300D\u5373\u53EF\u52A0\u5165\uFF1B\u70B9\u5217\u8868\u6587\u5B57\u586B\u5145\u5230\u53D1\u9001\u6846</div>
+  </div>
   <h4>\u5FAA\u73AF\u53D1\u9001\u5F39\u5E55\uFF08\u9700\u767B\u5F55\uFF09</h4>
   <textarea data-key="loopTexts" placeholder="\u4E00\u884C\u4E00\u6761"></textarea>
   <div class="dyex-row">\u95F4\u9694
@@ -947,6 +1186,70 @@
       if (el.type === "checkbox") el.checked = !!v;
       else el.value = v ?? "";
     });
+  }
+  function favoriteRow(text) {
+    const row = document.createElement("div");
+    row.className = "dyex-fav-item";
+    const label = document.createElement("span");
+    label.className = "dyex-fav-text";
+    label.textContent = text;
+    label.title = "\u70B9\u51FB\u586B\u5145\u5230\u53D1\u9001\u6846";
+    label.addEventListener("click", () => {
+      const ok = fillChat(text);
+      toast(ok ? "\u5DF2\u586B\u5145\u5230\u53D1\u9001\u6846" : "\u586B\u5145\u5931\u8D25\uFF1A\u8BF7\u786E\u8BA4\u5DF2\u767B\u5F55\u6296\u97F3\uFF0C\u4E14\u804A\u5929\u8F93\u5165\u6846\u53EF\u7528", ok ? "success" : "error");
+    });
+    const send = document.createElement("button");
+    send.textContent = "\u53D1\u9001";
+    send.title = "\u76F4\u63A5\u53D1\u9001\u8FD9\u6761\u6536\u85CF";
+    send.addEventListener("click", async () => {
+      const ok = await sendChat(text);
+      if (!ok) toast("\u53D1\u9001\u5931\u8D25\uFF1A\u8BF7\u786E\u8BA4\u5DF2\u767B\u5F55\u6296\u97F3\uFF0C\u4E14\u804A\u5929\u8F93\u5165\u6846\u53EF\u7528", "error");
+    });
+    const del = document.createElement("button");
+    del.className = "is-secondary";
+    del.textContent = "\u5220\u9664";
+    del.title = "\u4ECE\u6536\u85CF\u4E2D\u5220\u9664";
+    del.addEventListener("click", () => {
+      setSetting("dmFavorites", removeFavorite(getSettings().dmFavorites, text));
+    });
+    row.append(label, send, del);
+    return row;
+  }
+  function renderFavorites(panel) {
+    const list = getSettings().dmFavorites;
+    const box = panel.querySelector("#dyex-fav-list");
+    const shown = filterFavorites(list, panel.querySelector("#dyex-fav-search").value);
+    box.replaceChildren();
+    if (!shown.length) {
+      const tip = document.createElement("div");
+      tip.className = "dyex-tip";
+      tip.textContent = list.length ? "\u6CA1\u6709\u5339\u914D\u7684\u6536\u85CF" : "\u6682\u65E0\u6536\u85CF";
+      box.append(tip);
+    } else {
+      for (const text of shown) box.append(favoriteRow(text));
+    }
+    panel.querySelector("#dyex-fav-count").textContent = list.length ? `\u5171 ${list.length} \u6761` : "";
+  }
+  function addFavoriteFromInput(panel) {
+    const input = panel.querySelector("#dyex-fav-new");
+    const text = input.value;
+    const list = getSettings().dmFavorites;
+    if (!text.trim()) return;
+    if (hasFavorite(list, text)) {
+      input.value = "";
+      toast("\u8FD9\u6761\u5F39\u5E55\u5DF2\u5728\u6536\u85CF\u4E2D");
+      return;
+    }
+    setSetting("dmFavorites", addFavorite(list, text));
+    input.value = "";
+    toast("\u5DF2\u6DFB\u52A0\u5230\u6536\u85CF", "success");
+  }
+  function clearFavorites() {
+    const list = getSettings().dmFavorites;
+    if (!list.length) return;
+    if (typeof confirm === "function" && !confirm(`\u786E\u5B9A\u6E05\u7A7A\u5168\u90E8 ${list.length} \u6761\u5F39\u5E55\u6536\u85CF\uFF1F`)) return;
+    setSetting("dmFavorites", []);
+    toast("\u5DF2\u6E05\u7A7A\u6536\u85CF");
   }
   function renderStreamButtons(panel) {
     const box = panel.querySelector("#dyex-stream-btns");
@@ -1102,6 +1405,7 @@
       if (open) {
         syncInputs(panel);
         renderStreamButtons(panel);
+        renderFavorites(panel);
         positionPanel(ball, panel);
       }
     };
@@ -1127,11 +1431,35 @@
       if (key === "autoFull" || key === "autoWebFull") {
         syncInputs(panel);
       }
+      if (key === "dmFavorites" && panel.classList.contains("is-open")) {
+        renderFavorites(panel);
+      }
     });
     const loopBtn = panel.querySelector("#dyex-loop-toggle");
     loopBtn.addEventListener("click", () => isLoopRunning() ? stopLoop() : startLoop());
     onLoopState((on) => loopBtn.textContent = on ? "\u505C\u6B62\u53D1\u9001" : "\u5F00\u59CB\u53D1\u9001");
     panel.querySelector("#dyex-quality-now").addEventListener("click", () => autoHighestQuality());
+    const favToggle = panel.querySelector("#dyex-fav-toggle");
+    const favBody = panel.querySelector("#dyex-fav-body");
+    const applyFavOpen = () => {
+      favToggle.classList.toggle("is-open", favOpen);
+      favBody.classList.toggle("is-open", favOpen);
+    };
+    favToggle.addEventListener("click", () => {
+      favOpen = !favOpen;
+      applyFavOpen();
+      if (panel.classList.contains("is-open")) positionPanel(ball, panel);
+    });
+    applyFavOpen();
+    panel.querySelector("#dyex-fav-search").addEventListener("input", () => renderFavorites(panel));
+    panel.querySelector("#dyex-fav-add").addEventListener("click", () => addFavoriteFromInput(panel));
+    panel.querySelector("#dyex-fav-new").addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      addFavoriteFromInput(panel);
+    });
+    panel.querySelector("#dyex-fav-clear").addEventListener("click", clearFavorites);
+    renderFavorites(panel);
     return { toggle };
   }
 
@@ -1171,10 +1499,38 @@
     };
   }
 
+  // src/packages/Chat/collect.js
+  function collectDanmaku(text) {
+    const value = String(text == null ? "" : text).trim();
+    if (!value) return false;
+    const list = getSettings().dmFavorites;
+    if (hasFavorite(list, value)) {
+      toast("\u8FD9\u6761\u5F39\u5E55\u5DF2\u5728\u6536\u85CF\u4E2D");
+      return false;
+    }
+    setSetting("dmFavorites", addFavorite(list, value));
+    toast("\u5DF2\u6536\u85CF\u5F39\u5E55", "success");
+    return true;
+  }
+  function makeFavoriteButton(className, text) {
+    const btn = document.createElement("span");
+    btn.className = className;
+    btn.setAttribute("data-dyex-btn", "fav");
+    btn.textContent = "\u6536\u85CF";
+    btn.title = "\u6536\u85CF\u8FD9\u6761\u5F39\u5E55\uFF08\u53EF\u5728 DouyinEX \u9762\u677F\u7684\u5F39\u5E55\u6536\u85CF\u4E2D\u67E5\u770B\uFF09";
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      collectDanmaku(text);
+    });
+    return btn;
+  }
+
   // src/packages/Chat/Shield.js
   var ITEM = ".webcast-chatroom___item";
   var SYSTEM_MSG = ".webcast-chatroom__room-message";
   var PLUS_CLASS = "dyex-plus1";
+  var FAV_CLASS = "dyex-fav";
+  var BTN_ATTR = "data-dyex-btn";
   var rules = [];
   var rulesRaw = null;
   var isRepeat = createRepeatFilter(1e4);
@@ -1187,7 +1543,7 @@
   }
   function getItemText(item) {
     const clone = item.cloneNode(true);
-    clone.querySelectorAll(`.${PLUS_CLASS}`).forEach((n) => n.remove());
+    clone.querySelectorAll(`[${BTN_ATTR}]`).forEach((n) => n.remove());
     return clone.textContent.replace(/\s+/g, " ").trim();
   }
   function getContentOnly(text) {
@@ -1218,21 +1574,26 @@
     if (s.shieldRepeat && isRepeat(content)) return true;
     return false;
   }
-  function addPlus1(item) {
-    if (!getSettings().plus1 || item.querySelector(`.${PLUS_CLASS}`)) return;
+  function addButtons(item) {
+    if (item.querySelector(`[${BTN_ATTR}]`)) return;
     if (isGiftMessage(item)) return;
-    const text = getContentOnly(getItemText(item));
-    if (!text || /来了$/.test(getItemText(item))) return;
-    const btn = document.createElement("span");
-    btn.className = PLUS_CLASS;
-    btn.textContent = "+1";
-    btn.title = "\u8DDF\u53D1\u8FD9\u6761\u5F39\u5E55";
-    btn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const ok = await sendChat(text);
-      if (!ok) toast("\u53D1\u9001\u5931\u8D25\uFF1A\u8BF7\u786E\u8BA4\u5DF2\u767B\u5F55\u6296\u97F3\uFF0C\u4E14\u804A\u5929\u8F93\u5165\u6846\u53EF\u7528", "error");
-    });
-    item.appendChild(btn);
+    const itemText = getItemText(item);
+    const text = getContentOnly(itemText);
+    if (!text || /来了$/.test(itemText)) return;
+    if (getSettings().plus1) {
+      const plus = document.createElement("span");
+      plus.className = PLUS_CLASS;
+      plus.setAttribute(BTN_ATTR, "plus");
+      plus.textContent = "+1";
+      plus.title = "\u8DDF\u53D1\u8FD9\u6761\u5F39\u5E55";
+      plus.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const ok = await sendChat(text);
+        if (!ok) toast("\u53D1\u9001\u5931\u8D25\uFF1A\u8BF7\u786E\u8BA4\u5DF2\u767B\u5F55\u6296\u97F3\uFF0C\u4E14\u804A\u5929\u8F93\u5165\u6846\u53EF\u7528", "error");
+      });
+      item.appendChild(plus);
+    }
+    item.appendChild(makeFavoriteButton(FAV_CLASS, text));
   }
   var HIDDEN_ATTR = "data-dyex-hidden";
   var handled = /* @__PURE__ */ new WeakSet();
@@ -1244,7 +1605,7 @@
       hideItem(item);
       return;
     }
-    addPlus1(item);
+    addButtons(item);
   }
   function rescanAll() {
     handled = /* @__PURE__ */ new WeakSet();
@@ -1252,7 +1613,7 @@
       el.style.display = "";
       el.removeAttribute(HIDDEN_ATTR);
     });
-    document.querySelectorAll(`.${PLUS_CLASS}`).forEach((el) => el.remove());
+    document.querySelectorAll(`[${BTN_ATTR}]`).forEach((el) => el.remove());
     document.querySelectorAll(ITEM).forEach(processItem);
   }
   var RESCAN_KEYS = /* @__PURE__ */ new Set([
@@ -1280,40 +1641,27 @@
     }).observe(list, { childList: true, subtree: true });
   }
 
-  // src/lib/barrage.js
-  function extractBarrage(params) {
-    const content = Array.isArray(params && params.content) ? params.content : [];
-    const text = content.filter((c) => c && c.type === "text").map((c) => String(c.text == null ? "" : c.text)).join("").trim();
-    const hasImage = content.some((c) => c && c.type === "image");
-    return {
-      id: String(params && params.id || ""),
-      text,
-      hasImage,
-      // 自己发的弹幕带边框，不应被屏蔽规则误伤
-      isSelf: !!(params && params.borderWidth),
-      // 画面上的送礼流水弹幕（如「xxx 送出粉丝团灯牌 x 1」），不应挂 +1 跟发按钮
-      isGift: hasImage && /\s*送出.+\sx\s*\d+$/i.test(text),
-      content
-    };
-  }
-
   // src/packages/Danmaku/Layer.js
   var LAYER_ID = "dyex-dm-layer";
   var ITEM_CLS = "dyex-dm-item";
   var PLUS_CLS = "dyex-dm-plus1";
+  var FAV_CLS = "dyex-dm-fav";
   var PLUGIN = ".CanvasDanmakuPlugin";
-  var MAX_ITEMS = 80;
+  var MAX_ITEMS = 300;
+  var MAX_DELAY_MS = 1500;
+  var LANE_GAP_MS = 300;
   var NATIVE_STYLE_ID = "dyex-dm-native-off";
   var NATIVE_HIDDEN_CSS = ".CanvasDanmakuPlugin canvas, canvas.CanvasDanmakuPlugin, #DanmakuLayout canvas { visibility: hidden !important; pointer-events: none !important; }";
   var hookedInst = null;
   var hookedBus = null;
-  var cfg = { fontSize: 20, speed: 14400, opacity: 0.8, area: { start: 0.01, end: 0.5 } };
+  var nativeCfg = null;
   var users = /* @__PURE__ */ new Map();
   var isRepeat2 = createRepeatFilter(1e4);
   var rules2 = [];
   var rulesRaw2 = null;
   var lanes = [];
   var laneKey = "";
+  var hoverEl = null;
   function refreshRules2() {
     const raw = getSettings().shieldKeywords;
     if (raw !== rulesRaw2) {
@@ -1431,14 +1779,57 @@
     });
     return btn;
   }
+  function clampNum2(v, min, max) {
+    return Math.min(max, Math.max(min, v));
+  }
+  function currentStyle() {
+    const s = getSettings();
+    const area = resolveArea(s.dmArea);
+    const n = nativeCfg;
+    const nativeFont = n && Number(n.fontSize);
+    const fontSize = Number.isFinite(nativeFont) && nativeFont > 0 ? Math.round(clampNum2(nativeFont, 8, 80)) : Math.round(clampNum2(Number(s.dmFontSize) || 20, 8, 80));
+    const nativeOpacity = n && Number(n.opacity);
+    const opacity = Number.isFinite(nativeOpacity) ? clampNum2(nativeOpacity, 0.05, 1) : clampNum2((Number(s.dmOpacity) || 80) / 100, 0.05, 1);
+    const nativeMs = n && Number(n.speed);
+    const speedMs = Number.isFinite(nativeMs) && nativeMs > 0 ? clampSpeedMs(nativeMs) : null;
+    const nativeStart = n && n.area && Number.isFinite(Number(n.area.start)) ? clampNum2(Number(n.area.start), 0, 0.9) : area.start;
+    const nativeRate = n && Number(n.maxHeightRate);
+    const hasNativeArea = Number.isFinite(nativeRate) && nativeRate > 0 || n && n.area && Number.isFinite(Number(n.area.end));
+    const areaEnd = hasNativeArea ? clampNum2(nativeStart + (Number.isFinite(nativeRate) && nativeRate > 0 ? nativeRate : Number(n.area.end)), 0.1, 1) : area.end;
+    return { fontSize, opacity, speedMs, fallbackPps: speedLevelToPps(s.dmSpeed), areaStart: nativeStart, areaEnd };
+  }
+  function beginHover(layer, el, anim) {
+    if (hoverEl && !hoverEl.isConnected) hoverEl = null;
+    if (hoverEl && hoverEl !== el) return;
+    hoverEl = el;
+    el.classList.add("is-hover");
+    layer.classList.add("is-hovering");
+    anim.pause();
+  }
+  function endHover(layer, el, anim) {
+    if (hoverEl !== el) return;
+    hoverEl = null;
+    el.classList.remove("is-hover");
+    layer.classList.remove("is-hovering");
+    if (anim.playState === "paused") anim.play();
+  }
   function renderItem(payload, parts, text, isSelf = false, allowPlus1 = true) {
     const layer = ensureLayer();
     if (!layer) return false;
-    if (layer.childElementCount >= MAX_ITEMS) layer.firstElementChild?.remove();
-    const fontSize = Number(cfg.fontSize) || 20;
+    if (layer.childElementCount >= MAX_ITEMS) {
+      const oldest = layer.firstElementChild;
+      if (oldest === hoverEl) {
+        hoverEl = null;
+        layer.classList.remove("is-hovering");
+      }
+      oldest?.remove();
+    }
+    const st = currentStyle();
+    const fontSize = st.fontSize;
     const el = document.createElement("span");
     el.className = isSelf ? `${ITEM_CLS} is-self` : ITEM_CLS;
     el.style.fontSize = `${fontSize}px`;
+    el.style.opacity = String(st.opacity);
     el.style.color = payload.color || "#fff";
     for (const p of parts) {
       if (p.type === "text" && p.text) el.append(document.createTextNode(p.text));
@@ -1449,16 +1840,21 @@
         el.append(img);
       }
     }
-    if (allowPlus1 && text && getSettings().plus1) el.append(makePlusBtn(text));
+    if (allowPlus1 && text) {
+      if (getSettings().plus1) el.append(makePlusBtn(text));
+      el.append(makeFavoriteButton(FAV_CLS, text));
+    }
     layer.append(el);
     const cw = layer.clientWidth || 1;
     const ch = layer.clientHeight || 1;
     const width = el.offsetWidth || 40;
+    const imgCount = el.querySelectorAll("img").length;
+    const reserveWidth = width + imgCount * Math.ceil(fontSize * 1.2);
     const laneH = Math.round(fontSize * 1.5);
-    const start = Math.max(0, (Number(cfg.area?.start) || 0.01) * ch);
-    const end = Math.min(1, Number(cfg.area?.end) || 0.5) * ch;
-    const laneCount = Math.max(1, Math.floor((end - start) / laneH));
-    const key = `${cw}x${ch}x${fontSize}`;
+    const start = Math.max(0, st.areaStart * ch);
+    const spanRate = Math.max(0.05, Math.min(1, st.areaEnd) - Math.max(0, st.areaStart));
+    const laneCount = getLaneCount({ height: ch, channelHeight: laneH, maxHeightRate: spanRate });
+    const key = `${cw}x${ch}x${fontSize}x${start}x${laneCount}`;
     if (key !== laneKey) {
       laneKey = key;
       lanes = new Array(laneCount).fill(0);
@@ -1476,24 +1872,32 @@
         lane = i;
       }
     }
+    let startAt = Math.max(now, lanes[lane] || now);
+    if (startAt - now > MAX_DELAY_MS) startAt = now;
     el.style.top = `${Math.round(start + lane * laneH)}px`;
-    const pps = Math.max(40, (Number(cfg.speed) || 14400) / 60);
-    lanes[lane] = now + width / pps * 1e3;
-    const duration = Math.max(1500, (cw + width) / pps * 1e3);
+    const duration = st.speedMs ? Math.max(1e3, st.speedMs) : Math.max(1500, (cw + width) / st.fallbackPps * 1e3);
+    const pps = (cw + width) / (duration / 1e3);
+    lanes[lane] = Math.max(lanes[lane] || 0, startAt + reserveWidth / pps * 1e3 + LANE_GAP_MS);
     const anim = el.animate(
       [{ transform: `translateX(${cw}px)` }, { transform: `translateX(${-width}px)` }],
-      { duration, easing: "linear", fill: "forwards" }
+      // delay + fill: both：排队期间停在屏幕右侧外（layer 已 overflow: hidden），到点才出发
+      { duration, delay: startAt - now, easing: "linear", fill: "both" }
     );
-    anim.onfinish = () => el.remove();
-    el.addEventListener("mouseenter", () => anim.pause());
-    el.addEventListener("mouseleave", () => {
-      if (anim.playState === "paused") anim.play();
-    });
+    anim.onfinish = () => {
+      endHover(layer, el, anim);
+      el.remove();
+    };
+    el.addEventListener("mouseenter", () => beginHover(layer, el, anim));
+    el.addEventListener("mouseleave", () => endHover(layer, el, anim));
     return true;
   }
   function clearLayer() {
     const layer = document.getElementById(LAYER_ID);
-    if (layer) layer.replaceChildren();
+    if (layer) {
+      layer.replaceChildren();
+      layer.classList.remove("is-hovering");
+    }
+    hoverEl = null;
     lanes = [];
     laneKey = "";
   }
@@ -1512,7 +1916,9 @@
       const fiber = findComponent();
       if (!fiber) return;
       const { inst, config } = readPluginState(fiber);
-      if (config) cfg = { ...cfg, ...config };
+      if (config) {
+        nativeCfg = config;
+      }
       if (inst && inst !== hookedInst) {
         hookSend(inst);
         hookedInst = inst;
@@ -2041,6 +2447,7 @@
     initHideGiftBar();
     initAutoFullMode();
     initWheelVolume();
+    initSyncTime();
     initChatShield();
     initDanmakuLayer();
     initLottery();

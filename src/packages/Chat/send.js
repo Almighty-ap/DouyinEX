@@ -22,6 +22,13 @@ function fillEditor(el, text) {
   return document.execCommand("insertText", false, text);
 }
 
+/** 仅把文本填进输入框，不发送（收藏列表点击填充用）；返回 false 表示未登录/无输入框/填充失败 */
+export function fillChat(text) {
+  const input = findChatInput();
+  if (!input) return false;
+  return fillEditor(input, text);
+}
+
 /** 发送一条弹幕；返回 false 表示未登录/无输入框/填充失败/发送按钮不可用 */
 export async function sendChat(text) {
   const input = findChatInput();

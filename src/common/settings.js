@@ -1,4 +1,12 @@
 import { getValue, setValue } from "./env.js";
+import {
+  DM_AREAS,
+  DM_AREA_DEFAULT,
+  DM_SPEED_MIN,
+  DM_SPEED_MAX,
+  DM_SPEED_DEFAULT,
+} from "../lib/barrage.js";
+import { normalizeFavorites } from "../lib/favorites.js";
 
 export const DEFAULTS = {
   autoQuality: true,
@@ -14,6 +22,12 @@ export const DEFAULTS = {
   ballPos: null,
   plus1: true,
   danmakuTakeover: true,
+  // 画面悬浮弹幕外观（接管渲染时生效，默认值与抖音原生一致）
+  dmFontSize: 20,
+  dmOpacity: 80,
+  dmSpeed: DM_SPEED_DEFAULT,
+  dmArea: DM_AREA_DEFAULT,
+  dmFavorites: [],
   shieldKeywords: "",
   shieldLevelBelow: 0,
   shieldEnter: false,
@@ -32,12 +46,24 @@ const MUTEX_KEY = {
 
 const listeners = new Set();
 let cache = null;
+const AREA_KEYS = new Set(DM_AREAS.map((a) => a.key));
+
+function clampNum(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
 
 export function normalizeSettings(raw = {}) {
   const merged = { ...DEFAULTS, ...(raw || {}) };
   if (merged.autoFull && merged.autoWebFull) {
     merged.autoWebFull = false;
   }
+  merged.dmFontSize = clampNum(merged.dmFontSize, 12, 40, DEFAULTS.dmFontSize);
+  merged.dmOpacity = clampNum(merged.dmOpacity, 20, 100, DEFAULTS.dmOpacity);
+  merged.dmSpeed = clampNum(merged.dmSpeed, DM_SPEED_MIN, DM_SPEED_MAX, DM_SPEED_DEFAULT);
+  if (!AREA_KEYS.has(merged.dmArea)) merged.dmArea = DM_AREA_DEFAULT;
+  merged.dmFavorites = normalizeFavorites(merged.dmFavorites);
   return merged;
 }
 

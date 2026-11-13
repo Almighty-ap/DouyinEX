@@ -22,6 +22,34 @@ test("normalizeSettings 在同时开启 autoFull 与 autoWebFull 时自动消解
   assert.equal(s.autoWebFull, false);
 });
 
+test("DEFAULTS 含弹幕显示与收藏默认值，normalizeSettings 夹取非法值", () => {
+  assert.equal(DEFAULTS.dmFontSize, 20);
+  assert.equal(DEFAULTS.dmOpacity, 80);
+  assert.equal(DEFAULTS.dmSpeed, 5);
+  assert.equal(DEFAULTS.dmArea, "half");
+  assert.deepEqual(DEFAULTS.dmFavorites, []);
+
+  const s = normalizeSettings({
+    dmFontSize: 999,
+    dmOpacity: 0,
+    dmSpeed: 99,
+    dmArea: "nope",
+    dmFavorites: [" 收藏这条 ", "收藏这条", 3, ""],
+  });
+  assert.equal(s.dmFontSize, 40);
+  assert.equal(s.dmOpacity, 20);
+  assert.equal(s.dmSpeed, 10);
+  assert.equal(s.dmArea, "half");
+  assert.deepEqual(s.dmFavorites, ["收藏这条"]);
+  assert.deepEqual(DEFAULTS.dmFavorites, []);
+
+  const d = normalizeSettings();
+  assert.equal(d.dmFontSize, 20);
+  assert.equal(d.dmOpacity, 80);
+  assert.equal(d.dmSpeed, 5);
+  assert.equal(d.dmArea, "half");
+});
+
 test("setSetting 保证 autoFull 与 autoWebFull 双向互斥并触发变更通知", () => {
   resetSettingsCacheForTest();
   const events = [];

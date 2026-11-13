@@ -11,6 +11,12 @@ const SIMPLE_CSS = `
 #GiftEffectLayout,
 .GiftTrayPlugin,
 .GiftEffectPlugin,
+/* 画面内的推广 / 短触卡片（右下角游戏链接、活动卡片等），部分由 iframe 容器渲染 */
+#EcmoCardLayout,
+#ShortTouchLayout,
+#__living_right_panel_id,
+iframe[data-container-id^="@annie/"],
+.tab-microgame,
 .douyin-player-controls > :not(.douyin-player-controls-inner) { display: none !important; }
 `;
 
@@ -20,6 +26,47 @@ const HIDE_GIFT_BAR_CSS = `
 #giftPanelEntrance,
 [data-e2e="recharge-btn"],
 .douyin-player-controls > :not(.douyin-player-controls-inner) { display: none !important; }
+`;
+
+/** 同步时间按钮：紧贴原生「刷新」右侧，样式与原生控制栏图标保持一致 */
+const SYNC_TIME_CSS = `
+.dyex-sync-time {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  margin-left: 8px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: .88;
+  /* 原生控制栏整体为 pointer-events:none，交互项各自置为 auto */
+  pointer-events: auto;
+  transition: opacity .15s, transform .1s;
+  -webkit-tap-highlight-color: transparent;
+}
+.dyex-sync-time:hover { opacity: 1; }
+.dyex-sync-time:active { transform: scale(.9); }
+.dyex-sync-time svg { width: 22px; height: 22px; display: block; }
+.dyex-sync-time::after {
+  content: "同步时间";
+  position: absolute;
+  left: 50%;
+  bottom: 40px;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, .78);
+  color: #fff;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s;
+}
+.dyex-sync-time:hover::after { opacity: 1; }
 `;
 
 /** 小黄车在播放器工具条里是动态挂载的，data-e2e 也可能随 A/B 变化，
@@ -511,6 +558,96 @@ export function initWheelVolume() {
   if (wheelBound) return;
   wheelBound = true;
   document.addEventListener("wheel", onWheel, { passive: false, capture: true });
+}
+
+/* ---------------- 同步时间：跳到直播最新画面 ----------------
+ * 抖音现行播放器是 WebCodecs + MediaStream（video.srcObject），<video>.buffered 恒为空，
+ * DouyuEx 的 currentTime = buffered.end(0) 无法复用；这里调用播放器原生 refresh()，
+ * 与原生「刷新（R）」同源，重新拉流并从直播最新关键帧开始播放。
+ */
+const SYNC_ICON = `
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <path d="M938.1888 534.016h-80.7936c0.4096-7.3728 0.6144-14.6432 0.6144-22.016 0-218.624-176.8448-400.7936-389.12-400.7936C257.024 111.2064 80.6912 293.1712 80.6912 512c0 218.7264 176.4352 400.7936 388.1984 400.7936 74.752 0 149.0944-22.016 208.1792-60.0064l42.7008 68.608c-75.0592 48.9472-161.9968 74.8544-250.7776 74.752C209.8176 996.1472 0 779.264 0 512S209.8176 27.8528 468.8896 27.8528C728.3712 27.8528 938.7008 244.736 938.7008 512c0 7.3728-0.2048 14.6432-0.512 22.016z m-26.4192-158.1056L426.7008 556.032V291.9424h64v226.5088L689.5616 635.904l-38.912 58.7776z m245.3504-6.656L768 512h256L896 688.0256z" fill="#fff"/>
+</svg>`;
+
+/** 原生「刷新」是控制栏左侧第二个元素（含「刷新 / R」文案的 slot），同步按钮插到它右边 */
+function findRefreshSlot(left) {
+  if (!left) return null;
+  const byText = Array.from(left.children).find((el) =>
+    (el.textContent || "").trim().startsWith("刷新")
+  );
+  if (byText) return byText;
+  // A/B 或文案变化时兜底：原生刷新通常是左侧第二个带图标的控件
+  const second = left.children[1];
+  return second && second.querySelector("svg") ? second : null;
+}
+
+function createSyncTimeButton() {
+  const btn = document.createElement("div");
+  btn.className = "dyex-sync-time";
+  btn.setAttribute("role", "button");
+  btn.setAttribute("aria-label", "同步时间");
+  btn.innerHTML = SYNC_ICON;
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    syncToLive();
+  });
+  return btn;
+}
+
+function ensureSyncTimeButton() {
+  const left = document.querySelector(".douyin-player-controls-left");
+  if (!left) return false;
+  const slot = findRefreshSlot(left);
+  if (!slot) return false;
+  const existing = left.querySelector(".dyex-sync-time");
+  if (existing) {
+    // 原生重渲染可能改变顺序，保持在刷新右侧
+    if (existing.previousElementSibling !== slot) slot.insertAdjacentElement("afterend", existing);
+    return true;
+  }
+  slot.insertAdjacentElement("afterend", createSyncTimeButton());
+  return true;
+}
+
+let lastSyncAt = 0;
+
+function syncToLive() {
+  if (Date.now() - lastSyncAt < 1500) return false;
+  lastSyncAt = Date.now();
+
+  const proxy = getPlayerProxy();
+  if (proxy && typeof proxy.refresh === "function") {
+    try {
+      proxy.refresh();
+      return true;
+    } catch (_) {}
+  }
+
+  // 兜底 1：直接点原生刷新按钮（与 R 键同源）
+  const slot = findRefreshSlot(document.querySelector(".douyin-player-controls-left"));
+  const refreshIcon = slot && (slot.querySelector("svg") || slot);
+  if (refreshIcon && triggerClick(refreshIcon)) return true;
+
+  // 兜底 2：旧版 MSE 播放器仍可用 buffered 末端跳转
+  const video = document.querySelector(".douyin-player video");
+  if (video && video.buffered && video.buffered.length) {
+    try {
+      video.currentTime = video.buffered.end(video.buffered.length - 1);
+      return true;
+    } catch (_) {}
+  }
+  return false;
+}
+
+let syncTimer = null;
+
+export function initSyncTime() {
+  injectStyle("dyex-sync-time", SYNC_TIME_CSS);
+  ensureSyncTimeButton();
+  clearInterval(syncTimer);
+  syncTimer = setInterval(ensureSyncTimeButton, 1200);
 }
 
 /* ---------------- 简洁模式：同步抖音自己的弹幕/礼物开关 ----------------

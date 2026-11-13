@@ -1,6 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractBarrage, getLaneCount, createLaneAllocator } from "../src/lib/barrage.js";
+import {
+  extractBarrage,
+  getLaneCount,
+  createLaneAllocator,
+  DM_AREAS,
+  DM_AREA_DEFAULT,
+  resolveArea,
+  speedLevelToPps,
+  DM_SPEED_DEFAULT,
+  DM_SPEED_MIN,
+  DM_SPEED_MAX,
+  DM_SPEED_MS_MIN,
+  DM_SPEED_MS_MAX,
+  DM_SPEED_MS_DEFAULT,
+  clampSpeedMs,
+} from "../src/lib/barrage.js";
 
 test("extractBarrage 拼接文字、识别图片与自己发的弹幕", () => {
   const b = extractBarrage({
@@ -39,6 +54,41 @@ test("getLaneCount 按 maxHeightRate 限制轨道数", () => {
   assert.equal(getLaneCount({ height: 807, channelHeight: 40 }), 20);
   assert.equal(getLaneCount({ height: 30, channelHeight: 40, maxHeightRate: 0.5 }), 1);
   assert.equal(getLaneCount({}), 1);
+});
+
+test("resolveArea 返回预设比例，未知值与缺省一律回退上半屏", () => {
+  assert.deepEqual(resolveArea("bottomHalf"), {
+    key: "bottomHalf",
+    label: "下半屏",
+    start: 0.5,
+    end: 1,
+  });
+  assert.equal(resolveArea(undefined).key, DM_AREA_DEFAULT);
+  assert.equal(resolveArea("nope").key, "half");
+  assert.equal(
+    DM_AREAS.every((a) => a.start >= 0 && a.end <= 1 && a.end > a.start),
+    true
+  );
+});
+
+test("speedLevelToPps 档位越大越快，默认档等于抖音原生 240px/s", () => {
+  assert.equal(speedLevelToPps(DM_SPEED_DEFAULT), 240);
+  assert.equal(speedLevelToPps(1), 96);
+  for (let lv = DM_SPEED_MIN; lv < DM_SPEED_MAX; lv++) {
+    assert.ok(speedLevelToPps(lv) < speedLevelToPps(lv + 1));
+  }
+  assert.equal(speedLevelToPps(99), speedLevelToPps(DM_SPEED_MAX));
+  assert.equal(speedLevelToPps(-3), speedLevelToPps(DM_SPEED_MIN));
+  assert.equal(speedLevelToPps("abc"), 240);
+});
+
+test("clampSpeedMs 夹取原生速度（毫秒/整屏）并回退默认", () => {
+  assert.equal(clampSpeedMs(14400), 14400);
+  assert.equal(clampSpeedMs(1), DM_SPEED_MS_MIN);
+  assert.equal(clampSpeedMs(999999), DM_SPEED_MS_MAX);
+  assert.equal(clampSpeedMs("abc"), DM_SPEED_MS_DEFAULT);
+  assert.equal(clampSpeedMs(null), DM_SPEED_MS_DEFAULT);
+  assert.equal(clampSpeedMs(-5), DM_SPEED_MS_DEFAULT);
 });
 
 test("同一时刻多条弹幕占用不同轨道，轨道满则放不下", () => {

@@ -7,11 +7,15 @@ import {
   createRepeatFilter,
 } from "../../lib/filter.js";
 import { sendChat } from "./send.js";
+import { makeFavoriteButton } from "./collect.js";
 import { toast } from "../../common/dom.js";
 
 const ITEM = ".webcast-chatroom___item";
 const SYSTEM_MSG = ".webcast-chatroom__room-message";
 const PLUS_CLASS = "dyex-plus1";
+const FAV_CLASS = "dyex-fav";
+// 我们注入的按钮都带这个属性：提取正文前需要先剔除，重扫时也据此清理
+const BTN_ATTR = "data-dyex-btn";
 
 let rules = [];
 let rulesRaw = null;
@@ -25,10 +29,10 @@ function refreshRules() {
   }
 }
 
-/** 提取消息正文：去掉 +1 按钮文案；用户名与正文无稳定类名，取整条文本 */
+/** 提取消息正文：去掉 +1 / 收藏 按钮文案；用户名与正文无稳定类名，取整条文本 */
 function getItemText(item) {
   const clone = item.cloneNode(true);
-  clone.querySelectorAll(`.${PLUS_CLASS}`).forEach((n) => n.remove());
+  clone.querySelectorAll(`[${BTN_ATTR}]`).forEach((n) => n.remove());
   return clone.textContent.replace(/\s+/g, " ").trim();
 }
 
@@ -71,21 +75,27 @@ function shouldHide(item) {
   return false;
 }
 
-function addPlus1(item) {
-  if (!getSettings().plus1 || item.querySelector(`.${PLUS_CLASS}`)) return;
-  if (isGiftMessage(item)) return; // 送礼流水跟发没有意义
-  const text = getContentOnly(getItemText(item));
-  if (!text || /来了$/.test(getItemText(item))) return;
-  const btn = document.createElement("span");
-  btn.className = PLUS_CLASS;
-  btn.textContent = "+1";
-  btn.title = "跟发这条弹幕";
-  btn.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    const ok = await sendChat(text);
-    if (!ok) toast("发送失败：请确认已登录抖音，且聊天输入框可用", "error");
-  });
-  item.appendChild(btn);
+/** 悬停浮出 +1（可关）与 收藏 按钮；按钮都带 data-dyex-btn 便于正文提取与重扫清理 */
+function addButtons(item) {
+  if (item.querySelector(`[${BTN_ATTR}]`)) return;
+  if (isGiftMessage(item)) return; // 送礼流水跟发与收藏都没有意义
+  const itemText = getItemText(item);
+  const text = getContentOnly(itemText);
+  if (!text || /来了$/.test(itemText)) return;
+  if (getSettings().plus1) {
+    const plus = document.createElement("span");
+    plus.className = PLUS_CLASS;
+    plus.setAttribute(BTN_ATTR, "plus");
+    plus.textContent = "+1";
+    plus.title = "跟发这条弹幕";
+    plus.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const ok = await sendChat(text);
+      if (!ok) toast("发送失败：请确认已登录抖音，且聊天输入框可用", "error");
+    });
+    item.appendChild(plus);
+  }
+  item.appendChild(makeFavoriteButton(FAV_CLASS, text));
 }
 
 const HIDDEN_ATTR = "data-dyex-hidden";
@@ -99,7 +109,7 @@ function processItem(item) {
     hideItem(item);
     return;
   }
-  addPlus1(item);
+  addButtons(item);
 }
 
 /** 过滤类设置变更后，撤销已隐藏的条目并对现有条目重新判定 */
@@ -109,7 +119,7 @@ function rescanAll() {
     el.style.display = "";
     el.removeAttribute(HIDDEN_ATTR);
   });
-  document.querySelectorAll(`.${PLUS_CLASS}`).forEach((el) => el.remove());
+  document.querySelectorAll(`[${BTN_ATTR}]`).forEach((el) => el.remove());
   document.querySelectorAll(ITEM).forEach(processItem);
 }
 

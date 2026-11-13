@@ -9,6 +9,7 @@ import {
   initSimpleMode,
   initFullscreenFoldChat,
   initHideGiftBar,
+  initSyncTime,
 } from "./packages/Player/Player.js";
 import { initChatShield } from "./packages/Chat/Shield.js";
 import { initDanmakuLayer } from "./packages/Danmaku/Layer.js";
@@ -28,6 +29,7 @@ function main() {
   initHideGiftBar();
   initAutoFullMode();
   initWheelVolume();
+  initSyncTime();
   initChatShield();
   initDanmakuLayer();
   initLottery();

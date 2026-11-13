@@ -1,8 +1,10 @@
 import css from "./Panel.css";
-import { injectStyle } from "../../common/dom.js";
+import { injectStyle, toast } from "../../common/dom.js";
 import { getSettings, setSetting, onSettingChange } from "../../common/settings.js";
+import { addFavorite, filterFavorites, hasFavorite, removeFavorite } from "../../lib/favorites.js";
 import { copyStream, getStreamMenuItems, autoHighestQuality } from "../Stream/Stream.js";
 import { startLoop, stopLoop, isLoopRunning, onLoopState } from "../Chat/Loop.js";
+import { fillChat, sendChat } from "../Chat/send.js";
 import { isFullMode } from "../Player/Player.js";
 
 const BALL_SVG = `<svg viewBox="0 0 108 108" xmlns="http://www.w3.org/2000/svg">
@@ -29,6 +31,9 @@ function checkRow(key, label) {
   return `<label><input type="checkbox" data-key="${key}"> ${label}</label>`;
 }
 
+// 收藏列表默认折叠（条数一多面板会被撑得很长）；展开状态在本次页面生命周期内保留
+let favOpen = false;
+
 function buildHtml() {
   return `
   <h4>直播流</h4>
@@ -38,12 +43,27 @@ function buildHtml() {
   ${CHECKS.slice(0, 9).map(([k, l]) => checkRow(k, l)).join("")}
   <h4>弹幕（画面上漂浮的弹幕）</h4>
   ${CHECKS.slice(9).map(([k, l]) => checkRow(k, l)).join("")}
+  <div class="dyex-tip">画面弹幕的字号 / 不透明度 / 显示区域 / 移动速度已改为跟随抖音自带的「弹幕设置」面板——接管开启时按原生设置渲染，这里不再重复配置</div>
   <div class="dyex-row">屏蔽等级低于
     <input type="number" min="0" max="80" data-key="shieldLevelBelow" data-num="1"> 的用户（0=不限）
   </div>
   <div class="dyex-tip">关键词屏蔽（一行一条，/正则/ 亦可）</div>
   <textarea data-key="shieldKeywords" placeholder="例如：刷屏&#10;/^6{3,}$/"></textarea>
   <div class="dyex-tip">以下屏蔽同时作用于画面悬浮弹幕与右侧聊天列表</div>
+  <h4 class="dyex-fold" id="dyex-fav-toggle">
+    <span class="dyex-fold-arrow">▸</span>弹幕收藏
+    <span class="dyex-tip" id="dyex-fav-count"></span>
+  </h4>
+  <div class="dyex-fold-body" id="dyex-fav-body">
+    <div class="dyex-row"><input type="text" class="dyex-grow" id="dyex-fav-search" placeholder="搜索收藏"></div>
+    <div class="dyex-row">
+      <input type="text" class="dyex-grow" id="dyex-fav-new" placeholder="手动添加一条收藏">
+      <button id="dyex-fav-add">添加</button>
+    </div>
+    <div class="dyex-fav-list" id="dyex-fav-list"></div>
+    <div class="dyex-row"><button class="is-secondary" id="dyex-fav-clear">清空收藏</button></div>
+    <div class="dyex-tip">悬停画面弹幕或右侧聊天条目点「收藏」即可加入；点列表文字填充到发送框</div>
+  </div>
   <h4>循环发送弹幕（需登录）</h4>
   <textarea data-key="loopTexts" placeholder="一行一条"></textarea>
   <div class="dyex-row">间隔
@@ -64,6 +84,79 @@ function syncInputs(panel) {
     if (el.type === "checkbox") el.checked = !!v;
     else el.value = v ?? "";
   });
+}
+
+/** 收藏列表一行：点文字填充到发送框，另有发送与删除 */
+function favoriteRow(text) {
+  const row = document.createElement("div");
+  row.className = "dyex-fav-item";
+
+  const label = document.createElement("span");
+  label.className = "dyex-fav-text";
+  label.textContent = text;
+  label.title = "点击填充到发送框";
+  label.addEventListener("click", () => {
+    const ok = fillChat(text);
+    toast(ok ? "已填充到发送框" : "填充失败：请确认已登录抖音，且聊天输入框可用", ok ? "success" : "error");
+  });
+
+  const send = document.createElement("button");
+  send.textContent = "发送";
+  send.title = "直接发送这条收藏";
+  send.addEventListener("click", async () => {
+    const ok = await sendChat(text);
+    if (!ok) toast("发送失败：请确认已登录抖音，且聊天输入框可用", "error");
+  });
+
+  const del = document.createElement("button");
+  del.className = "is-secondary";
+  del.textContent = "删除";
+  del.title = "从收藏中删除";
+  del.addEventListener("click", () => {
+    setSetting("dmFavorites", removeFavorite(getSettings().dmFavorites, text));
+  });
+
+  row.append(label, send, del);
+  return row;
+}
+
+function renderFavorites(panel) {
+  const list = getSettings().dmFavorites;
+  const box = panel.querySelector("#dyex-fav-list");
+  const shown = filterFavorites(list, panel.querySelector("#dyex-fav-search").value);
+  box.replaceChildren();
+  if (!shown.length) {
+    const tip = document.createElement("div");
+    tip.className = "dyex-tip";
+    tip.textContent = list.length ? "没有匹配的收藏" : "暂无收藏";
+    box.append(tip);
+  } else {
+    for (const text of shown) box.append(favoriteRow(text));
+  }
+  panel.querySelector("#dyex-fav-count").textContent = list.length ? `共 ${list.length} 条` : "";
+}
+
+function addFavoriteFromInput(panel) {
+  const input = panel.querySelector("#dyex-fav-new");
+  const text = input.value;
+  const list = getSettings().dmFavorites;
+  if (!text.trim()) return;
+  if (hasFavorite(list, text)) {
+    input.value = "";
+    toast("这条弹幕已在收藏中");
+    return;
+  }
+  setSetting("dmFavorites", addFavorite(list, text));
+  input.value = "";
+  toast("已添加到收藏", "success");
+}
+
+function clearFavorites() {
+  const list = getSettings().dmFavorites;
+  if (!list.length) return;
+  if (typeof confirm === "function" && !confirm(`确定清空全部 ${list.length} 条弹幕收藏？`)) return;
+  setSetting("dmFavorites", []);
+  toast("已清空收藏");
 }
 
 function renderStreamButtons(panel) {
@@ -240,6 +333,7 @@ export function initPanel() {
     if (open) {
       syncInputs(panel);
       renderStreamButtons(panel);
+      renderFavorites(panel);
       positionPanel(ball, panel);
     }
   };
@@ -270,6 +364,9 @@ export function initPanel() {
     if (key === "autoFull" || key === "autoWebFull") {
       syncInputs(panel);
     }
+    if (key === "dmFavorites" && panel.classList.contains("is-open")) {
+      renderFavorites(panel);
+    }
   });
 
   const loopBtn = panel.querySelector("#dyex-loop-toggle");
@@ -277,6 +374,30 @@ export function initPanel() {
   onLoopState((on) => (loopBtn.textContent = on ? "停止发送" : "开始发送"));
 
   panel.querySelector("#dyex-quality-now").addEventListener("click", () => autoHighestQuality());
+
+  const favToggle = panel.querySelector("#dyex-fav-toggle");
+  const favBody = panel.querySelector("#dyex-fav-body");
+  const applyFavOpen = () => {
+    favToggle.classList.toggle("is-open", favOpen);
+    favBody.classList.toggle("is-open", favOpen);
+  };
+  favToggle.addEventListener("click", () => {
+    favOpen = !favOpen;
+    applyFavOpen();
+    // 折叠会改变面板高度，重新贴回悬浮球
+    if (panel.classList.contains("is-open")) positionPanel(ball, panel);
+  });
+  applyFavOpen();
+
+  panel.querySelector("#dyex-fav-search").addEventListener("input", () => renderFavorites(panel));
+  panel.querySelector("#dyex-fav-add").addEventListener("click", () => addFavoriteFromInput(panel));
+  panel.querySelector("#dyex-fav-new").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    addFavoriteFromInput(panel);
+  });
+  panel.querySelector("#dyex-fav-clear").addEventListener("click", clearFavorites);
+  renderFavorites(panel);
 
   return { toggle };
 }

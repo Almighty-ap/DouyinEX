@@ -18,6 +18,11 @@
 #dyex-panel.is-open { display: block; }
 #dyex-panel h4 { margin: 10px 0 6px; font-size: 13px; color: #fe2c55; }
 #dyex-panel h4:first-child { margin-top: 0; }
+#dyex-panel h4.dyex-fold { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+#dyex-panel .dyex-fold-arrow { display: inline-block; transition: transform .15s; }
+#dyex-panel h4.dyex-fold.is-open .dyex-fold-arrow { transform: rotate(90deg); }
+#dyex-panel .dyex-fold-body { display: none; }
+#dyex-panel .dyex-fold-body.is-open { display: block; }
 #dyex-panel label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 #dyex-panel input[type="text"], #dyex-panel input[type="number"], #dyex-panel textarea {
   background: #2a2a30; color: #eee; border: 1px solid #444; border-radius: 4px;
@@ -32,13 +37,41 @@
 #dyex-panel button.is-secondary { background: #3a3a42; }
 #dyex-panel .dyex-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; flex-wrap: wrap; }
 #dyex-panel .dyex-tip { color: #999; font-size: 12px; }
-
-.dyex-plus1 {
-  margin-left: 8px; padding: 0 6px; border-radius: 8px; font-size: 12px;
-  color: #fe2c55; border: 1px solid #fe2c55; cursor: pointer; opacity: 0;
-  transition: opacity .15s; user-select: none; display: inline-block;
+#dyex-panel .dyex-grow { flex: 1; min-width: 0; }
+#dyex-panel input[type="range"] { width: 108px; accent-color: #fe2c55; }
+#dyex-panel .dyex-val { color: #fe2c55; min-width: 76px; font-size: 12px; }
+#dyex-panel select {
+  background: #2a2a30; color: #eee; border: 1px solid #444; border-radius: 4px;
+  padding: 3px 6px; font-size: 12px; box-sizing: border-box;
 }
-.webcast-chatroom___item:hover .dyex-plus1 { opacity: 1; }
+#dyex-panel .dyex-fav-list { max-height: 168px; overflow-y: auto; margin: 4px 0; }
+#dyex-panel .dyex-fav-item {
+  display: flex; align-items: center; gap: 6px; padding: 2px 0;
+  border-bottom: 1px solid #333;
+}
+#dyex-panel .dyex-fav-text {
+  flex: 1; min-width: 0; cursor: pointer; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+#dyex-panel .dyex-fav-text:hover { color: #fe2c55; }
+#dyex-panel .dyex-fav-item button { padding: 1px 6px; font-size: 11px; margin: 0; }
+
+/* 聊天条目的悬停按钮：绝对定位，不参与条目排版。
+   若按行内元素插入，每条消息会被撑高一行（实测单行条目 34px → 56px），
+   脚本逐条注入时列表内容会持续跳动，可视条数也几乎少一半。 */
+.webcast-chatroom___item { position: relative; }
+.dyex-plus1, .dyex-fav {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  margin: 0; padding: 0 6px; border-radius: 8px; font-size: 12px; line-height: 18px;
+  white-space: nowrap; background: #fff;
+  border: 1px solid #fe2c55; color: #fe2c55; cursor: pointer; opacity: 0;
+  transition: opacity .15s; user-select: none;
+}
+.dyex-plus1 { right: 48px; }
+.dyex-fav { right: 4px; border-color: #f5a623; color: #f5a623; }
+.webcast-chatroom___item:hover .dyex-plus1, .webcast-chatroom___item:hover .dyex-fav {
+  opacity: 1;
+}
 
 /* 接管后的悬浮弹幕层 */
 #dyex-dm-layer {
@@ -46,7 +79,7 @@
 }
 .dyex-dm-item {
   position: absolute; left: 0; top: 0; white-space: nowrap; pointer-events: auto;
-  user-select: none; line-height: 1.35; opacity: .85; cursor: default;
+  user-select: none; line-height: 1.35; cursor: default;
   text-shadow: -1px -1px 0 rgba(0,0,0,.8), 1px -1px 0 rgba(0,0,0,.8),
     -1px 1px 0 rgba(0,0,0,.8), 1px 1px 0 rgba(0,0,0,.8), 0 0 2px rgba(0,0,0,.8);
 }
@@ -54,13 +87,25 @@
 .dyex-dm-item.is-self {
   border: 1px solid rgba(255,255,255,.85); border-radius: 6px; padding: 0 6px;
 }
-.dyex-dm-plus1 {
+/* 悬停中的弹幕：置顶并加底色，保证 +1 / 收藏 始终点在最初想操作的那一条上。
+   悬停期间其余弹幕不参与命中测试，后飘来的弹幕既盖不住它也抢不走悬停。 */
+.dyex-dm-item.is-hover {
+  z-index: 2; background: rgba(0,0,0,.45); border-radius: 6px; padding: 0 6px;
+}
+#dyex-dm-layer.is-hovering .dyex-dm-item { pointer-events: none; }
+#dyex-dm-layer.is-hovering .dyex-dm-item.is-hover { pointer-events: auto; }
+.dyex-dm-plus1, .dyex-dm-fav {
   display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 8px;
-  background: #fe2c55; color: #fff; font-size: 12px; line-height: 18px;
-  vertical-align: 2px; text-shadow: none; cursor: pointer; opacity: 0;
+  color: #fff; font-size: 12px; line-height: 18px; vertical-align: 2px;
+  text-shadow: none; cursor: pointer; opacity: 0; pointer-events: none;
   transition: opacity .15s;
 }
-.dyex-dm-item:hover .dyex-dm-plus1 { opacity: 1; }
+.dyex-dm-plus1 { background: #fe2c55; }
+.dyex-dm-fav { background: #f5a623; }
+.dyex-dm-item:hover .dyex-dm-plus1, .dyex-dm-item:hover .dyex-dm-fav,
+.dyex-dm-item.is-hover .dyex-dm-plus1, .dyex-dm-item.is-hover .dyex-dm-fav {
+  opacity: 1; pointer-events: auto;
+}
 
 #dyex-toast {
   position: fixed; left: 50%; top: 80px; transform: translateX(-50%);
