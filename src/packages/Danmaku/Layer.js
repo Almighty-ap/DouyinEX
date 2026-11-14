@@ -4,6 +4,7 @@ import { parseKeywords, matchKeywords, createRepeatFilter } from "../../lib/filt
 import {
   extractBarrage,
   getLaneCount,
+  pickLane,
   resolveArea,
   speedLevelToPps,
   clampSpeedMs,
@@ -19,7 +20,7 @@ import { toast, injectStyle } from "../../common/dom.js";
  * 无法直接在弹幕上挂 +1 按钮，也无法按条隐藏。这里改成：
  *   1. 包装弹幕插件的 send(payload)，在入绘制队列前截下每条弹幕；
  *   2. 过滤命中屏蔽规则的直接丢弃；
- *   3. 其余的用 DOM 自己渲染成悬浮弹幕，悬停出现 +1 / 收藏按钮。
+ *   3. 其余的用 DOM 自己渲染成悬浮弹幕，悬停时在**文字下方**浮出 +1 / 收藏按钮。
  * 接管成功后隐藏原生 canvas，纯图片 / 礼物流水也由 DOM 层复刻，避免双重渲染且不丢礼物信息；
  * 关闭接管或尚未成功包装插件时，恢复原生 canvas 渲染。
  *
@@ -29,16 +30,18 @@ import { toast, injectStyle } from "../../common/dom.js";
 
 const LAYER_ID = "dyex-dm-layer";
 const ITEM_CLS = "dyex-dm-item";
+const TEXT_CLS = "dyex-dm-text";
+const ACTIONS_CLS = "dyex-dm-actions";
 const PLUS_CLS = "dyex-dm-plus1";
 const FAV_CLS = "dyex-dm-fav";
 const PLUGIN = ".CanvasDanmakuPlugin";
 // 同时存在的弹幕上限（不再因为拥挤丢弹幕，且慢速档一条要飘十几秒，放宽上限避免误删画面上的弹幕）
 const MAX_ITEMS = 300;
-// 同轨道排队上限：只等这么久，超过就直接出发（允许与同轨道前一条重叠），
-// 换取「不丢弹幕」。宽松场景下仍走串行出发、完全不重叠。
-const MAX_DELAY_MS = 1500;
 // 同轨道相邻两条之间的额外间隙（毫秒），避免宽度测量误差导致贴到一起
 const LANE_GAP_MS = 300;
+// 鼠标滑出某条弹幕时的宽限期：行高只有 1.35 行，往旁边的按钮挪的时候很容易中途滑出去，
+// 立刻解除悬停会让这条重新飘走、焦点跳到相邻弹幕上；先宽限这么久，滑回来就撤销。
+const HOVER_GRACE_MS = 180;
 const NATIVE_STYLE_ID = "dyex-dm-native-off";
 // 只隐藏 canvas，不隐藏 .CanvasDanmakuPlugin 容器本身：
 // 容器可能同时承载我们的 #dyex-dm-layer，整层隐藏会把 DOM 复刻层一起藏掉。
@@ -58,6 +61,8 @@ let laneKey = "";
 // 当前被悬停（已暂停）的弹幕元素：悬停期间其余弹幕不参与命中测试，
 // 否则后飘来的弹幕会盖在它上面，把悬停目标抢走并让这一条继续飘走。
 let hoverEl = null;
+// 待执行的「解除悬停」定时器（鼠标滑出后的宽限期，见 HOVER_GRACE_MS）
+let leaveTimer = null;
 
 function refreshRules() {
   const raw = getSettings().shieldKeywords;
@@ -240,15 +245,26 @@ function currentStyle() {
   return { fontSize, opacity, speedMs, fallbackPps: speedLevelToPps(s.dmSpeed), areaStart: nativeStart, areaEnd };
 }
 
+function cancelLeave() {
+  if (!leaveTimer) return;
+  clearTimeout(leaveTimer);
+  leaveTimer = null;
+}
+
 /**
  * 悬停期间把这一条标记为唯一命中目标：
- * 其余弹幕 `pointer-events: none`，后飘来的弹幕既不能盖住它也不能抢走悬停，
- * 只有当鼠标真的移开这一条时（mouseleave）才交还悬停。
+ * 其余弹幕 `pointer-events: none`，后飘来的弹幕既不能盖住它也不能抢走悬停。
  */
 function beginHover(layer, el, anim) {
   // hoverEl 已脱离文档（层被清空 / 被裁掉）时不再挡住新的悬停
   if (hoverEl && !hoverEl.isConnected) hoverEl = null;
-  if (hoverEl && hoverEl !== el) return;
+  if (hoverEl === el) {
+    // 宽限期内又滑回这一条：撤销将要执行的解除，弹幕始终没重新飘走
+    cancelLeave();
+    return;
+  }
+  if (hoverEl) return;
+  cancelLeave();
   hoverEl = el;
   el.classList.add("is-hover");
   layer.classList.add("is-hovering");
@@ -256,11 +272,22 @@ function beginHover(layer, el, anim) {
 }
 
 function endHover(layer, el, anim) {
+  cancelLeave();
   if (hoverEl !== el) return;
   hoverEl = null;
   el.classList.remove("is-hover");
   layer.classList.remove("is-hovering");
   if (anim.playState === "paused") anim.play();
+}
+
+/** 鼠标滑出这一条：宽限一拍再解除，滑回来即撤销（见 HOVER_GRACE_MS） */
+function scheduleEndHover(layer, el, anim) {
+  if (hoverEl !== el) return;
+  cancelLeave();
+  leaveTimer = setTimeout(() => {
+    leaveTimer = null;
+    endHover(layer, el, anim);
+  }, HOVER_GRACE_MS);
 }
 
 function renderItem(payload, parts, text, isSelf = false, allowPlus1 = true) {
@@ -282,19 +309,32 @@ function renderItem(payload, parts, text, isSelf = false, allowPlus1 = true) {
   el.style.fontSize = `${fontSize}px`;
   el.style.opacity = String(st.opacity);
   el.style.color = payload.color || "#fff";
+
+  // 文字单独一层：宽度测量与轨道占用都以它为准（下面的操作行悬停才展开，不参与测量）
+  const body = document.createElement("span");
+  body.className = TEXT_CLS;
   for (const p of parts) {
-    if (p.type === "text" && p.text) el.append(document.createTextNode(p.text));
+    if (p.type === "text" && p.text) body.append(document.createTextNode(p.text));
     else if (p.type === "image" && p.src) {
       const img = document.createElement("img");
       img.src = p.src;
       img.alt = "";
-      el.append(img);
+      body.append(img);
     }
   }
-  // 只有真正的观众弹幕挂交互按钮：礼物流水（allowPlus1 为 false）既不 +1 也不收藏
+  el.append(body);
+
+  // 只有真正的观众弹幕挂交互按钮：礼物流水（allowPlus1 为 false）既不 +1 也不收藏。
+  // 按钮**下置**在文字下方一行、与文字左对齐：以前跟在文字右边，要贴着 1.35 行高的细条
+  // 往右挪十几到几十像素才够得到，半路往上下偏一点就滑出这一条（悬停解除、弹幕继续飘走），
+  // 焦点也就落到相邻弹幕上；弹幕刚进画面时右半截还会被播放器右边缘裁掉（悬停后它停住不动，
+  // 裁掉的那截永远看不到）；下置后只需往下挪几像素，且始终在同一条弹幕的盒子里。
   if (allowPlus1 && text) {
-    if (getSettings().plus1) el.append(makePlusBtn(text));
-    el.append(makeFavoriteButton(FAV_CLS, text));
+    const actions = document.createElement("span");
+    actions.className = ACTIONS_CLS;
+    if (getSettings().plus1) actions.append(makePlusBtn(text));
+    actions.append(makeFavoriteButton(FAV_CLS, text));
+    el.append(actions);
   }
   layer.append(el);
 
@@ -316,24 +356,21 @@ function renderItem(payload, parts, text, isSelf = false, allowPlus1 = true) {
     lanes = new Array(laneCount).fill(0);
   }
 
-  // 轨道分配：优先用已空出的轨道；全都被占用时按最早空出的轨道**延后出发**（不重叠）。
-  // 等待超过 MAX_DELAY_MS 的（说明这条轨道已经排满）就改为立刻出发，允许与同轨道前一条重叠，
-  // 以此保证任何一条弹幕都不会被丢掉。
+  // 轨道分配（纯函数见 lib/barrage.js 的 pickLane）：优先用已空出的轨道，
+  // 全都被占用时按最早空出的那条**延后出发**（不重叠）。挤不下时怎么取舍由面板
+  // 「密集时优先减少重叠」开关决定：关闭 = 立刻出发（允许同轨道适度重叠、一条都不丢），
+  // 开启 = 丢弃这条（画面更干净，密集时弹幕会变少）。
   const now = Date.now();
-  let lane = 0;
-  let earliest = Infinity;
-  for (let i = 0; i < lanes.length; i++) {
-    if (lanes[i] <= now) {
-      lane = i;
-      break;
-    }
-    if (lanes[i] < earliest) {
-      earliest = lanes[i];
-      lane = i;
-    }
+  const { lane, startAt, drop } = pickLane({
+    lanes,
+    now,
+    avoidOverlap: !!getSettings().dmAvoidOverlap,
+  });
+  if (drop) {
+    // 丢弃：原生 canvas 已被隐藏，这条就是不上屏（按用户选择的取舍策略）
+    el.remove();
+    return true;
   }
-  let startAt = Math.max(now, lanes[lane] || now);
-  if (startAt - now > MAX_DELAY_MS) startAt = now;
   el.style.top = `${Math.round(start + lane * laneH)}px`;
 
   // speedMs 是「从右侧屏外到左侧屏外」的总时长，正好等于这条弹幕的动画时长；
@@ -356,7 +393,7 @@ function renderItem(payload, parts, text, isSelf = false, allowPlus1 = true) {
   };
   // 悬停暂停：否则弹幕飞得太快，+1 / 收藏 按钮根本点不到
   el.addEventListener("mouseenter", () => beginHover(layer, el, anim));
-  el.addEventListener("mouseleave", () => endHover(layer, el, anim));
+  el.addEventListener("mouseleave", () => scheduleEndHover(layer, el, anim));
   return true;
 }
 
@@ -366,6 +403,7 @@ function clearLayer() {
     layer.replaceChildren();
     layer.classList.remove("is-hovering");
   }
+  cancelLeave();
   hoverEl = null;
   lanes = [];
   laneKey = "";

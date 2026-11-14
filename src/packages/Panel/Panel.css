@@ -77,35 +77,35 @@
 #dyex-dm-layer {
   position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1;
 }
+/* 文字在上、操作行在下：内边距恒定，悬停展开操作行时文字不会跳位 */
 .dyex-dm-item {
-  position: absolute; left: 0; top: 0; white-space: nowrap; pointer-events: auto;
+  position: absolute; left: 0; top: 0; display: flex; flex-direction: column;
+  align-items: flex-start; padding: 0 6px; pointer-events: auto;
   user-select: none; line-height: 1.35; cursor: default;
   text-shadow: -1px -1px 0 rgba(0,0,0,.8), 1px -1px 0 rgba(0,0,0,.8),
     -1px 1px 0 rgba(0,0,0,.8), 1px 1px 0 rgba(0,0,0,.8), 0 0 2px rgba(0,0,0,.8);
 }
+.dyex-dm-text { white-space: nowrap; }
 .dyex-dm-item img { height: 1.15em; vertical-align: -.2em; }
-.dyex-dm-item.is-self {
-  border: 1px solid rgba(255,255,255,.85); border-radius: 6px; padding: 0 6px;
-}
+.dyex-dm-item.is-self { border: 1px solid rgba(255,255,255,.85); border-radius: 6px; }
 /* 悬停中的弹幕：置顶并加底色，保证 +1 / 收藏 始终点在最初想操作的那一条上。
    悬停期间其余弹幕不参与命中测试，后飘来的弹幕既盖不住它也抢不走悬停。 */
-.dyex-dm-item.is-hover {
-  z-index: 2; background: rgba(0,0,0,.45); border-radius: 6px; padding: 0 6px;
-}
+.dyex-dm-item.is-hover { z-index: 2; background: rgba(0,0,0,.55); border-radius: 6px; }
 #dyex-dm-layer.is-hovering .dyex-dm-item { pointer-events: none; }
 #dyex-dm-layer.is-hovering .dyex-dm-item.is-hover { pointer-events: auto; }
+/* +1 / 收藏 下置在文字下方一行：默认不占位（宽度测量与轨道间距仍按文字算），悬停才展开。
+   左对齐，弹幕只飘进画面半截时按钮也一定跟在可见的文字下面。 */
+.dyex-dm-actions { display: none; }
+.dyex-dm-item.is-hover .dyex-dm-actions {
+  display: flex; gap: 6px; margin-top: 2px; padding-bottom: 2px;
+}
 .dyex-dm-plus1, .dyex-dm-fav {
-  display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 8px;
-  color: #fff; font-size: 12px; line-height: 18px; vertical-align: 2px;
-  text-shadow: none; cursor: pointer; opacity: 0; pointer-events: none;
-  transition: opacity .15s;
+  padding: 0 8px; border-radius: 9px; color: #fff; font-size: 12px; line-height: 18px;
+  white-space: nowrap; text-shadow: none; cursor: pointer;
 }
 .dyex-dm-plus1 { background: #fe2c55; }
 .dyex-dm-fav { background: #f5a623; }
-.dyex-dm-item:hover .dyex-dm-plus1, .dyex-dm-item:hover .dyex-dm-fav,
-.dyex-dm-item.is-hover .dyex-dm-plus1, .dyex-dm-item.is-hover .dyex-dm-fav {
-  opacity: 1; pointer-events: auto;
-}
+.dyex-dm-plus1:hover, .dyex-dm-fav:hover { filter: brightness(1.15); }
 
 #dyex-toast {
   position: fixed; left: 50%; top: 80px; transform: translateX(-50%);

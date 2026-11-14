@@ -70,6 +70,43 @@ export function speedLevelToPps(level) {
   return SPEED_PPS[lv - 1];
 }
 
+/**
+ * 密集时的取舍：轨道全被占用时有两种策略，互为代价，由面板开关交给用户选（见 D-23）。
+ * - 默认（`avoidOverlap = false`）**优先不丢弹幕**：同轨道最多等 `OVERLAP_WAIT_MS`，
+ *   超过就直接出发、允许与同轨道前一条适度重叠，一条都不会丢；
+ * - `avoidOverlap = true` **优先减少重叠**：继续等到轨道空出（画面更干净），但等待超过
+ *   `OVERLAP_DROP_MS` 的这条丢弃——再等下去它与发送时刻脱节太远，屏上也会积压动画。
+ */
+export const OVERLAP_WAIT_MS = 1500;
+export const OVERLAP_DROP_MS = 4000;
+
+/**
+ * 选轨道：优先用已空出的轨道，全都被占用时挑最早空出的那条。
+ * 返回 `{ lane, startAt, drop }`，`startAt` 是出发时刻（ms），`drop` 为 true 表示按当前策略丢弃这条。
+ * 立刻出发的重叠场景下 `startAt` 就是 `now`，调用方据此只把轨道时间戳往前推、不回拨。
+ */
+export function pickLane({ lanes, now, avoidOverlap = false }) {
+  if (!Array.isArray(lanes) || !lanes.length) return { lane: 0, startAt: now, drop: false };
+  let lane = 0;
+  let earliest = Infinity;
+  for (let i = 0; i < lanes.length; i++) {
+    if (lanes[i] <= now) return { lane: i, startAt: now, drop: false };
+    if (lanes[i] < earliest) {
+      earliest = lanes[i];
+      lane = i;
+    }
+  }
+  const wait = earliest - now;
+  if (avoidOverlap) {
+    return wait > OVERLAP_DROP_MS
+      ? { lane, startAt: earliest, drop: true }
+      : { lane, startAt: earliest, drop: false };
+  }
+  return wait > OVERLAP_WAIT_MS
+    ? { lane, startAt: now, drop: false }
+    : { lane, startAt: earliest, drop: false };
+}
+
 /** 可用轨道数：按 maxHeightRate 限制占用高度 */
 export function getLaneCount({ height, channelHeight, maxHeightRate }) {
   if (!height || !channelHeight) return 1;

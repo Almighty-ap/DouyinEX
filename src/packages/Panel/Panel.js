@@ -44,6 +44,7 @@ function buildHtml() {
   ${CHECKS.slice(0, 9).map(([k, l]) => checkRow(k, l)).join("")}
   <h4>弹幕（画面上漂浮的弹幕）</h4>
   ${CHECKS.slice(9).map(([k, l]) => checkRow(k, l)).join("")}
+  ${checkRow("dmAvoidOverlap", "密集时优先减少重叠（挤不下的弹幕直接丢弃）")}
   <div class="dyex-row">屏蔽等级低于
     <input type="number" min="0" max="80" data-key="shieldLevelBelow" data-num="1"> 的用户（0=不限）
   </div>

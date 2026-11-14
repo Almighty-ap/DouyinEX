@@ -29,6 +29,8 @@ export const DEFAULTS = {
   dmSpeed: DM_SPEED_DEFAULT,
   dmArea: DM_AREA_DEFAULT,
   dmFavorites: [],
+  // 密集时优先减少重叠（挤不下的弹幕直接丢弃）；关闭则优先不丢弹幕（允许同轨道适度重叠）
+  dmAvoidOverlap: false,
   shieldKeywords: "",
   shieldLevelBelow: 0,
   shieldEnter: false,
@@ -67,6 +69,7 @@ export function normalizeSettings(raw = {}) {
   merged.dmOpacity = clampNum(merged.dmOpacity, 20, 100, DEFAULTS.dmOpacity);
   merged.dmSpeed = clampNum(merged.dmSpeed, DM_SPEED_MIN, DM_SPEED_MAX, DM_SPEED_DEFAULT);
   if (!AREA_KEYS.has(merged.dmArea)) merged.dmArea = DM_AREA_DEFAULT;
+  merged.dmAvoidOverlap = !!merged.dmAvoidOverlap;
   merged.dmFavorites = normalizeFavorites(merged.dmFavorites);
   merged.chatHistory = normalizeHistory(merged.chatHistory);
   return merged;

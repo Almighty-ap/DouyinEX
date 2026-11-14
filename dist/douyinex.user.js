@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DouyinEX-抖音直播间增强插件
 // @namespace    https://github.com/Almighty-ap/DouyinEX
-// @version      0.1.4
+// @version      0.1.5
 // @description  抖音直播间增强：复制直播流(原画/超清/高清) 自动最高画质 网页全屏/完全全屏 全屏净化 同步时间 滚轮调音量 弹幕接管与屏蔽 弹幕+1 弹幕收藏 循环发送弹幕 自动抢免费福袋 简洁模式
 // @author       DouyinEX
 // @license      MIT
@@ -92,6 +92,25 @@
     const n = Math.round(Number(level));
     const lv = Number.isFinite(n) ? Math.min(DM_SPEED_MAX, Math.max(DM_SPEED_MIN, n)) : DM_SPEED_DEFAULT;
     return SPEED_PPS[lv - 1];
+  }
+  var OVERLAP_WAIT_MS = 1500;
+  var OVERLAP_DROP_MS = 4e3;
+  function pickLane({ lanes: lanes2, now, avoidOverlap = false }) {
+    if (!Array.isArray(lanes2) || !lanes2.length) return { lane: 0, startAt: now, drop: false };
+    let lane = 0;
+    let earliest = Infinity;
+    for (let i = 0; i < lanes2.length; i++) {
+      if (lanes2[i] <= now) return { lane: i, startAt: now, drop: false };
+      if (lanes2[i] < earliest) {
+        earliest = lanes2[i];
+        lane = i;
+      }
+    }
+    const wait = earliest - now;
+    if (avoidOverlap) {
+      return wait > OVERLAP_DROP_MS ? { lane, startAt: earliest, drop: true } : { lane, startAt: earliest, drop: false };
+    }
+    return wait > OVERLAP_WAIT_MS ? { lane, startAt: now, drop: false } : { lane, startAt: earliest, drop: false };
   }
   function getLaneCount({ height, channelHeight, maxHeightRate }) {
     if (!height || !channelHeight) return 1;
@@ -192,6 +211,8 @@
     dmSpeed: DM_SPEED_DEFAULT,
     dmArea: DM_AREA_DEFAULT,
     dmFavorites: [],
+    // 密集时优先减少重叠（挤不下的弹幕直接丢弃）；关闭则优先不丢弹幕（允许同轨道适度重叠）
+    dmAvoidOverlap: false,
     shieldKeywords: "",
     shieldLevelBelow: 0,
     shieldEnter: false,
@@ -226,6 +247,7 @@
     merged.dmOpacity = clampNum(merged.dmOpacity, 20, 100, DEFAULTS.dmOpacity);
     merged.dmSpeed = clampNum(merged.dmSpeed, DM_SPEED_MIN, DM_SPEED_MAX, DM_SPEED_DEFAULT);
     if (!AREA_KEYS.has(merged.dmArea)) merged.dmArea = DM_AREA_DEFAULT;
+    merged.dmAvoidOverlap = !!merged.dmAvoidOverlap;
     merged.dmFavorites = normalizeFavorites(merged.dmFavorites);
     merged.chatHistory = normalizeHistory(merged.chatHistory);
     return merged;
@@ -257,7 +279,7 @@
   }
 
   // src/packages/Panel/Panel.css
-  var Panel_default = '#dyex-ball {\n  position: fixed; right: 16px; bottom: 200px; width: 40px; height: 40px;\n  border-radius: 50%; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.35);\n  cursor: grab; touch-action: none; z-index: 2147483000; display: flex; align-items: center;\n  justify-content: center; user-select: none; transition: transform .15s, opacity .2s;\n}\n#dyex-ball:hover { transform: scale(1.1); }\n#dyex-ball.is-dragging { cursor: grabbing; transition: none; transform: scale(1.08); }\n#dyex-ball.is-hidden { opacity: 0 !important; pointer-events: none !important; transform: scale(.75); }\n#dyex-ball svg { width: 30px; height: 30px; pointer-events: none; }\n\n#dyex-panel {\n  position: fixed; right: 64px; bottom: 80px; width: 340px; max-height: 70vh;\n  overflow-y: auto; background: rgba(22,22,26,.96); color: #eee; font-size: 13px;\n  border-radius: 10px; padding: 12px 14px; z-index: 2147483000;\n  box-shadow: 0 6px 24px rgba(0,0,0,.5); display: none; line-height: 1.6;\n}\n#dyex-panel.is-open { display: block; }\n#dyex-panel h4 { margin: 10px 0 6px; font-size: 13px; color: #fe2c55; }\n#dyex-panel h4:first-child { margin-top: 0; }\n#dyex-panel h4.dyex-fold { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }\n#dyex-panel .dyex-fold-arrow { display: inline-block; transition: transform .15s; }\n#dyex-panel h4.dyex-fold.is-open .dyex-fold-arrow { transform: rotate(90deg); }\n#dyex-panel .dyex-fold-body { display: none; }\n#dyex-panel .dyex-fold-body.is-open { display: block; }\n#dyex-panel label { display: flex; align-items: center; gap: 6px; cursor: pointer; }\n#dyex-panel input[type="text"], #dyex-panel input[type="number"], #dyex-panel textarea {\n  background: #2a2a30; color: #eee; border: 1px solid #444; border-radius: 4px;\n  padding: 3px 6px; font-size: 12px; box-sizing: border-box;\n}\n#dyex-panel textarea { width: 100%; resize: vertical; min-height: 56px; }\n#dyex-panel input[type="number"] { width: 64px; }\n#dyex-panel button {\n  background: #fe2c55; color: #fff; border: 0; border-radius: 4px;\n  padding: 3px 10px; font-size: 12px; cursor: pointer; margin: 2px 4px 2px 0;\n}\n#dyex-panel button.is-secondary { background: #3a3a42; }\n#dyex-panel .dyex-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; flex-wrap: wrap; }\n#dyex-panel .dyex-tip { color: #999; font-size: 12px; }\n#dyex-panel .dyex-grow { flex: 1; min-width: 0; }\n#dyex-panel input[type="range"] { width: 108px; accent-color: #fe2c55; }\n#dyex-panel .dyex-val { color: #fe2c55; min-width: 76px; font-size: 12px; }\n#dyex-panel select {\n  background: #2a2a30; color: #eee; border: 1px solid #444; border-radius: 4px;\n  padding: 3px 6px; font-size: 12px; box-sizing: border-box;\n}\n#dyex-panel .dyex-fav-list { max-height: 168px; overflow-y: auto; margin: 4px 0; }\n#dyex-panel .dyex-fav-item {\n  display: flex; align-items: center; gap: 6px; padding: 2px 0;\n  border-bottom: 1px solid #333;\n}\n#dyex-panel .dyex-fav-text {\n  flex: 1; min-width: 0; cursor: pointer; overflow: hidden;\n  text-overflow: ellipsis; white-space: nowrap;\n}\n#dyex-panel .dyex-fav-text:hover { color: #fe2c55; }\n#dyex-panel .dyex-fav-item button { padding: 1px 6px; font-size: 11px; margin: 0; }\n\n/* \u804A\u5929\u6761\u76EE\u7684\u60AC\u505C\u6309\u94AE\uFF1A\u7EDD\u5BF9\u5B9A\u4F4D\uFF0C\u4E0D\u53C2\u4E0E\u6761\u76EE\u6392\u7248\u3002\n   \u82E5\u6309\u884C\u5185\u5143\u7D20\u63D2\u5165\uFF0C\u6BCF\u6761\u6D88\u606F\u4F1A\u88AB\u6491\u9AD8\u4E00\u884C\uFF08\u5B9E\u6D4B\u5355\u884C\u6761\u76EE 34px \u2192 56px\uFF09\uFF0C\n   \u811A\u672C\u9010\u6761\u6CE8\u5165\u65F6\u5217\u8868\u5185\u5BB9\u4F1A\u6301\u7EED\u8DF3\u52A8\uFF0C\u53EF\u89C6\u6761\u6570\u4E5F\u51E0\u4E4E\u5C11\u4E00\u534A\u3002 */\n.webcast-chatroom___item { position: relative; }\n.dyex-plus1, .dyex-fav {\n  position: absolute; top: 50%; transform: translateY(-50%);\n  margin: 0; padding: 0 6px; border-radius: 8px; font-size: 12px; line-height: 18px;\n  white-space: nowrap; background: #fff;\n  border: 1px solid #fe2c55; color: #fe2c55; cursor: pointer; opacity: 0;\n  transition: opacity .15s; user-select: none;\n}\n.dyex-plus1 { right: 48px; }\n.dyex-fav { right: 4px; border-color: #f5a623; color: #f5a623; }\n.webcast-chatroom___item:hover .dyex-plus1, .webcast-chatroom___item:hover .dyex-fav {\n  opacity: 1;\n}\n\n/* \u63A5\u7BA1\u540E\u7684\u60AC\u6D6E\u5F39\u5E55\u5C42 */\n#dyex-dm-layer {\n  position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1;\n}\n.dyex-dm-item {\n  position: absolute; left: 0; top: 0; white-space: nowrap; pointer-events: auto;\n  user-select: none; line-height: 1.35; cursor: default;\n  text-shadow: -1px -1px 0 rgba(0,0,0,.8), 1px -1px 0 rgba(0,0,0,.8),\n    -1px 1px 0 rgba(0,0,0,.8), 1px 1px 0 rgba(0,0,0,.8), 0 0 2px rgba(0,0,0,.8);\n}\n.dyex-dm-item img { height: 1.15em; vertical-align: -.2em; }\n.dyex-dm-item.is-self {\n  border: 1px solid rgba(255,255,255,.85); border-radius: 6px; padding: 0 6px;\n}\n/* \u60AC\u505C\u4E2D\u7684\u5F39\u5E55\uFF1A\u7F6E\u9876\u5E76\u52A0\u5E95\u8272\uFF0C\u4FDD\u8BC1 +1 / \u6536\u85CF \u59CB\u7EC8\u70B9\u5728\u6700\u521D\u60F3\u64CD\u4F5C\u7684\u90A3\u4E00\u6761\u4E0A\u3002\n   \u60AC\u505C\u671F\u95F4\u5176\u4F59\u5F39\u5E55\u4E0D\u53C2\u4E0E\u547D\u4E2D\u6D4B\u8BD5\uFF0C\u540E\u98D8\u6765\u7684\u5F39\u5E55\u65E2\u76D6\u4E0D\u4F4F\u5B83\u4E5F\u62A2\u4E0D\u8D70\u60AC\u505C\u3002 */\n.dyex-dm-item.is-hover {\n  z-index: 2; background: rgba(0,0,0,.45); border-radius: 6px; padding: 0 6px;\n}\n#dyex-dm-layer.is-hovering .dyex-dm-item { pointer-events: none; }\n#dyex-dm-layer.is-hovering .dyex-dm-item.is-hover { pointer-events: auto; }\n.dyex-dm-plus1, .dyex-dm-fav {\n  display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 8px;\n  color: #fff; font-size: 12px; line-height: 18px; vertical-align: 2px;\n  text-shadow: none; cursor: pointer; opacity: 0; pointer-events: none;\n  transition: opacity .15s;\n}\n.dyex-dm-plus1 { background: #fe2c55; }\n.dyex-dm-fav { background: #f5a623; }\n.dyex-dm-item:hover .dyex-dm-plus1, .dyex-dm-item:hover .dyex-dm-fav,\n.dyex-dm-item.is-hover .dyex-dm-plus1, .dyex-dm-item.is-hover .dyex-dm-fav {\n  opacity: 1; pointer-events: auto;\n}\n\n#dyex-toast {\n  position: fixed; left: 50%; top: 80px; transform: translateX(-50%);\n  padding: 8px 16px; border-radius: 6px; background: rgba(0,0,0,.85); color: #fff;\n  font-size: 13px; z-index: 2147483647; opacity: 0; pointer-events: none;\n  transition: opacity .2s;\n}\n#dyex-toast.is-show { opacity: 1; }\n#dyex-toast[data-type="success"] { background: rgba(22,163,74,.92); }\n#dyex-toast[data-type="error"] { background: rgba(220,38,38,.92); }\n';
+  var Panel_default = '#dyex-ball {\n  position: fixed; right: 16px; bottom: 200px; width: 40px; height: 40px;\n  border-radius: 50%; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.35);\n  cursor: grab; touch-action: none; z-index: 2147483000; display: flex; align-items: center;\n  justify-content: center; user-select: none; transition: transform .15s, opacity .2s;\n}\n#dyex-ball:hover { transform: scale(1.1); }\n#dyex-ball.is-dragging { cursor: grabbing; transition: none; transform: scale(1.08); }\n#dyex-ball.is-hidden { opacity: 0 !important; pointer-events: none !important; transform: scale(.75); }\n#dyex-ball svg { width: 30px; height: 30px; pointer-events: none; }\n\n#dyex-panel {\n  position: fixed; right: 64px; bottom: 80px; width: 340px; max-height: 70vh;\n  overflow-y: auto; background: rgba(22,22,26,.96); color: #eee; font-size: 13px;\n  border-radius: 10px; padding: 12px 14px; z-index: 2147483000;\n  box-shadow: 0 6px 24px rgba(0,0,0,.5); display: none; line-height: 1.6;\n}\n#dyex-panel.is-open { display: block; }\n#dyex-panel h4 { margin: 10px 0 6px; font-size: 13px; color: #fe2c55; }\n#dyex-panel h4:first-child { margin-top: 0; }\n#dyex-panel h4.dyex-fold { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }\n#dyex-panel .dyex-fold-arrow { display: inline-block; transition: transform .15s; }\n#dyex-panel h4.dyex-fold.is-open .dyex-fold-arrow { transform: rotate(90deg); }\n#dyex-panel .dyex-fold-body { display: none; }\n#dyex-panel .dyex-fold-body.is-open { display: block; }\n#dyex-panel label { display: flex; align-items: center; gap: 6px; cursor: pointer; }\n#dyex-panel input[type="text"], #dyex-panel input[type="number"], #dyex-panel textarea {\n  background: #2a2a30; color: #eee; border: 1px solid #444; border-radius: 4px;\n  padding: 3px 6px; font-size: 12px; box-sizing: border-box;\n}\n#dyex-panel textarea { width: 100%; resize: vertical; min-height: 56px; }\n#dyex-panel input[type="number"] { width: 64px; }\n#dyex-panel button {\n  background: #fe2c55; color: #fff; border: 0; border-radius: 4px;\n  padding: 3px 10px; font-size: 12px; cursor: pointer; margin: 2px 4px 2px 0;\n}\n#dyex-panel button.is-secondary { background: #3a3a42; }\n#dyex-panel .dyex-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; flex-wrap: wrap; }\n#dyex-panel .dyex-tip { color: #999; font-size: 12px; }\n#dyex-panel .dyex-grow { flex: 1; min-width: 0; }\n#dyex-panel input[type="range"] { width: 108px; accent-color: #fe2c55; }\n#dyex-panel .dyex-val { color: #fe2c55; min-width: 76px; font-size: 12px; }\n#dyex-panel select {\n  background: #2a2a30; color: #eee; border: 1px solid #444; border-radius: 4px;\n  padding: 3px 6px; font-size: 12px; box-sizing: border-box;\n}\n#dyex-panel .dyex-fav-list { max-height: 168px; overflow-y: auto; margin: 4px 0; }\n#dyex-panel .dyex-fav-item {\n  display: flex; align-items: center; gap: 6px; padding: 2px 0;\n  border-bottom: 1px solid #333;\n}\n#dyex-panel .dyex-fav-text {\n  flex: 1; min-width: 0; cursor: pointer; overflow: hidden;\n  text-overflow: ellipsis; white-space: nowrap;\n}\n#dyex-panel .dyex-fav-text:hover { color: #fe2c55; }\n#dyex-panel .dyex-fav-item button { padding: 1px 6px; font-size: 11px; margin: 0; }\n\n/* \u804A\u5929\u6761\u76EE\u7684\u60AC\u505C\u6309\u94AE\uFF1A\u7EDD\u5BF9\u5B9A\u4F4D\uFF0C\u4E0D\u53C2\u4E0E\u6761\u76EE\u6392\u7248\u3002\n   \u82E5\u6309\u884C\u5185\u5143\u7D20\u63D2\u5165\uFF0C\u6BCF\u6761\u6D88\u606F\u4F1A\u88AB\u6491\u9AD8\u4E00\u884C\uFF08\u5B9E\u6D4B\u5355\u884C\u6761\u76EE 34px \u2192 56px\uFF09\uFF0C\n   \u811A\u672C\u9010\u6761\u6CE8\u5165\u65F6\u5217\u8868\u5185\u5BB9\u4F1A\u6301\u7EED\u8DF3\u52A8\uFF0C\u53EF\u89C6\u6761\u6570\u4E5F\u51E0\u4E4E\u5C11\u4E00\u534A\u3002 */\n.webcast-chatroom___item { position: relative; }\n.dyex-plus1, .dyex-fav {\n  position: absolute; top: 50%; transform: translateY(-50%);\n  margin: 0; padding: 0 6px; border-radius: 8px; font-size: 12px; line-height: 18px;\n  white-space: nowrap; background: #fff;\n  border: 1px solid #fe2c55; color: #fe2c55; cursor: pointer; opacity: 0;\n  transition: opacity .15s; user-select: none;\n}\n.dyex-plus1 { right: 48px; }\n.dyex-fav { right: 4px; border-color: #f5a623; color: #f5a623; }\n.webcast-chatroom___item:hover .dyex-plus1, .webcast-chatroom___item:hover .dyex-fav {\n  opacity: 1;\n}\n\n/* \u63A5\u7BA1\u540E\u7684\u60AC\u6D6E\u5F39\u5E55\u5C42 */\n#dyex-dm-layer {\n  position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1;\n}\n/* \u6587\u5B57\u5728\u4E0A\u3001\u64CD\u4F5C\u884C\u5728\u4E0B\uFF1A\u5185\u8FB9\u8DDD\u6052\u5B9A\uFF0C\u60AC\u505C\u5C55\u5F00\u64CD\u4F5C\u884C\u65F6\u6587\u5B57\u4E0D\u4F1A\u8DF3\u4F4D */\n.dyex-dm-item {\n  position: absolute; left: 0; top: 0; display: flex; flex-direction: column;\n  align-items: flex-start; padding: 0 6px; pointer-events: auto;\n  user-select: none; line-height: 1.35; cursor: default;\n  text-shadow: -1px -1px 0 rgba(0,0,0,.8), 1px -1px 0 rgba(0,0,0,.8),\n    -1px 1px 0 rgba(0,0,0,.8), 1px 1px 0 rgba(0,0,0,.8), 0 0 2px rgba(0,0,0,.8);\n}\n.dyex-dm-text { white-space: nowrap; }\n.dyex-dm-item img { height: 1.15em; vertical-align: -.2em; }\n.dyex-dm-item.is-self { border: 1px solid rgba(255,255,255,.85); border-radius: 6px; }\n/* \u60AC\u505C\u4E2D\u7684\u5F39\u5E55\uFF1A\u7F6E\u9876\u5E76\u52A0\u5E95\u8272\uFF0C\u4FDD\u8BC1 +1 / \u6536\u85CF \u59CB\u7EC8\u70B9\u5728\u6700\u521D\u60F3\u64CD\u4F5C\u7684\u90A3\u4E00\u6761\u4E0A\u3002\n   \u60AC\u505C\u671F\u95F4\u5176\u4F59\u5F39\u5E55\u4E0D\u53C2\u4E0E\u547D\u4E2D\u6D4B\u8BD5\uFF0C\u540E\u98D8\u6765\u7684\u5F39\u5E55\u65E2\u76D6\u4E0D\u4F4F\u5B83\u4E5F\u62A2\u4E0D\u8D70\u60AC\u505C\u3002 */\n.dyex-dm-item.is-hover { z-index: 2; background: rgba(0,0,0,.55); border-radius: 6px; }\n#dyex-dm-layer.is-hovering .dyex-dm-item { pointer-events: none; }\n#dyex-dm-layer.is-hovering .dyex-dm-item.is-hover { pointer-events: auto; }\n/* +1 / \u6536\u85CF \u4E0B\u7F6E\u5728\u6587\u5B57\u4E0B\u65B9\u4E00\u884C\uFF1A\u9ED8\u8BA4\u4E0D\u5360\u4F4D\uFF08\u5BBD\u5EA6\u6D4B\u91CF\u4E0E\u8F68\u9053\u95F4\u8DDD\u4ECD\u6309\u6587\u5B57\u7B97\uFF09\uFF0C\u60AC\u505C\u624D\u5C55\u5F00\u3002\n   \u5DE6\u5BF9\u9F50\uFF0C\u5F39\u5E55\u53EA\u98D8\u8FDB\u753B\u9762\u534A\u622A\u65F6\u6309\u94AE\u4E5F\u4E00\u5B9A\u8DDF\u5728\u53EF\u89C1\u7684\u6587\u5B57\u4E0B\u9762\u3002 */\n.dyex-dm-actions { display: none; }\n.dyex-dm-item.is-hover .dyex-dm-actions {\n  display: flex; gap: 6px; margin-top: 2px; padding-bottom: 2px;\n}\n.dyex-dm-plus1, .dyex-dm-fav {\n  padding: 0 8px; border-radius: 9px; color: #fff; font-size: 12px; line-height: 18px;\n  white-space: nowrap; text-shadow: none; cursor: pointer;\n}\n.dyex-dm-plus1 { background: #fe2c55; }\n.dyex-dm-fav { background: #f5a623; }\n.dyex-dm-plus1:hover, .dyex-dm-fav:hover { filter: brightness(1.15); }\n\n#dyex-toast {\n  position: fixed; left: 50%; top: 80px; transform: translateX(-50%);\n  padding: 8px 16px; border-radius: 6px; background: rgba(0,0,0,.85); color: #fff;\n  font-size: 13px; z-index: 2147483647; opacity: 0; pointer-events: none;\n  transition: opacity .2s;\n}\n#dyex-toast.is-show { opacity: 1; }\n#dyex-toast[data-type="success"] { background: rgba(22,163,74,.92); }\n#dyex-toast[data-type="error"] { background: rgba(220,38,38,.92); }\n';
 
   // src/common/dom.js
   function sleep(ms) {
@@ -1229,6 +1251,7 @@ iframe[data-container-id^="@annie/"],
   ${CHECKS.slice(0, 9).map(([k, l]) => checkRow(k, l)).join("")}
   <h4>\u5F39\u5E55\uFF08\u753B\u9762\u4E0A\u6F02\u6D6E\u7684\u5F39\u5E55\uFF09</h4>
   ${CHECKS.slice(9).map(([k, l]) => checkRow(k, l)).join("")}
+  ${checkRow("dmAvoidOverlap", "\u5BC6\u96C6\u65F6\u4F18\u5148\u51CF\u5C11\u91CD\u53E0\uFF08\u6324\u4E0D\u4E0B\u7684\u5F39\u5E55\u76F4\u63A5\u4E22\u5F03\uFF09")}
   <div class="dyex-row">\u5C4F\u853D\u7B49\u7EA7\u4F4E\u4E8E
     <input type="number" min="0" max="80" data-key="shieldLevelBelow" data-num="1"> \u7684\u7528\u6237\uFF080=\u4E0D\u9650\uFF09
   </div>
@@ -1836,12 +1859,14 @@ iframe[data-container-id^="@annie/"],
   // src/packages/Danmaku/Layer.js
   var LAYER_ID = "dyex-dm-layer";
   var ITEM_CLS = "dyex-dm-item";
+  var TEXT_CLS = "dyex-dm-text";
+  var ACTIONS_CLS = "dyex-dm-actions";
   var PLUS_CLS = "dyex-dm-plus1";
   var FAV_CLS = "dyex-dm-fav";
   var PLUGIN = ".CanvasDanmakuPlugin";
   var MAX_ITEMS = 300;
-  var MAX_DELAY_MS = 1500;
   var LANE_GAP_MS = 300;
+  var HOVER_GRACE_MS = 180;
   var NATIVE_STYLE_ID = "dyex-dm-native-off";
   var NATIVE_HIDDEN_CSS = ".CanvasDanmakuPlugin canvas, canvas.CanvasDanmakuPlugin, #DanmakuLayout canvas { visibility: hidden !important; pointer-events: none !important; }";
   var hookedInst = null;
@@ -1854,6 +1879,7 @@ iframe[data-container-id^="@annie/"],
   var lanes = [];
   var laneKey = "";
   var hoverEl = null;
+  var leaveTimer = null;
   function refreshRules2() {
     const raw = getSettings().shieldKeywords;
     if (raw !== rulesRaw2) {
@@ -1990,20 +2016,39 @@ iframe[data-container-id^="@annie/"],
     const areaEnd = hasNativeArea ? clampNum2(nativeStart + (Number.isFinite(nativeRate) && nativeRate > 0 ? nativeRate : Number(n.area.end)), 0.1, 1) : area.end;
     return { fontSize, opacity, speedMs, fallbackPps: speedLevelToPps(s.dmSpeed), areaStart: nativeStart, areaEnd };
   }
+  function cancelLeave() {
+    if (!leaveTimer) return;
+    clearTimeout(leaveTimer);
+    leaveTimer = null;
+  }
   function beginHover(layer, el, anim) {
     if (hoverEl && !hoverEl.isConnected) hoverEl = null;
-    if (hoverEl && hoverEl !== el) return;
+    if (hoverEl === el) {
+      cancelLeave();
+      return;
+    }
+    if (hoverEl) return;
+    cancelLeave();
     hoverEl = el;
     el.classList.add("is-hover");
     layer.classList.add("is-hovering");
     anim.pause();
   }
   function endHover(layer, el, anim) {
+    cancelLeave();
     if (hoverEl !== el) return;
     hoverEl = null;
     el.classList.remove("is-hover");
     layer.classList.remove("is-hovering");
     if (anim.playState === "paused") anim.play();
+  }
+  function scheduleEndHover(layer, el, anim) {
+    if (hoverEl !== el) return;
+    cancelLeave();
+    leaveTimer = setTimeout(() => {
+      leaveTimer = null;
+      endHover(layer, el, anim);
+    }, HOVER_GRACE_MS);
   }
   function renderItem(payload, parts, text, isSelf = false, allowPlus1 = true) {
     const layer = ensureLayer();
@@ -2023,18 +2068,24 @@ iframe[data-container-id^="@annie/"],
     el.style.fontSize = `${fontSize}px`;
     el.style.opacity = String(st.opacity);
     el.style.color = payload.color || "#fff";
+    const body = document.createElement("span");
+    body.className = TEXT_CLS;
     for (const p of parts) {
-      if (p.type === "text" && p.text) el.append(document.createTextNode(p.text));
+      if (p.type === "text" && p.text) body.append(document.createTextNode(p.text));
       else if (p.type === "image" && p.src) {
         const img = document.createElement("img");
         img.src = p.src;
         img.alt = "";
-        el.append(img);
+        body.append(img);
       }
     }
+    el.append(body);
     if (allowPlus1 && text) {
-      if (getSettings().plus1) el.append(makePlusBtn(text));
-      el.append(makeFavoriteButton(FAV_CLS, text));
+      const actions = document.createElement("span");
+      actions.className = ACTIONS_CLS;
+      if (getSettings().plus1) actions.append(makePlusBtn(text));
+      actions.append(makeFavoriteButton(FAV_CLS, text));
+      el.append(actions);
     }
     layer.append(el);
     const cw = layer.clientWidth || 1;
@@ -2052,20 +2103,15 @@ iframe[data-container-id^="@annie/"],
       lanes = new Array(laneCount).fill(0);
     }
     const now = Date.now();
-    let lane = 0;
-    let earliest = Infinity;
-    for (let i = 0; i < lanes.length; i++) {
-      if (lanes[i] <= now) {
-        lane = i;
-        break;
-      }
-      if (lanes[i] < earliest) {
-        earliest = lanes[i];
-        lane = i;
-      }
+    const { lane, startAt, drop } = pickLane({
+      lanes,
+      now,
+      avoidOverlap: !!getSettings().dmAvoidOverlap
+    });
+    if (drop) {
+      el.remove();
+      return true;
     }
-    let startAt = Math.max(now, lanes[lane] || now);
-    if (startAt - now > MAX_DELAY_MS) startAt = now;
     el.style.top = `${Math.round(start + lane * laneH)}px`;
     const duration = st.speedMs ? Math.max(1e3, st.speedMs) : Math.max(1500, (cw + width) / st.fallbackPps * 1e3);
     const pps = (cw + width) / (duration / 1e3);
@@ -2080,7 +2126,7 @@ iframe[data-container-id^="@annie/"],
       el.remove();
     };
     el.addEventListener("mouseenter", () => beginHover(layer, el, anim));
-    el.addEventListener("mouseleave", () => endHover(layer, el, anim));
+    el.addEventListener("mouseleave", () => scheduleEndHover(layer, el, anim));
     return true;
   }
   function clearLayer() {
@@ -2089,6 +2135,7 @@ iframe[data-container-id^="@annie/"],
       layer.replaceChildren();
       layer.classList.remove("is-hovering");
     }
+    cancelLeave();
     hoverEl = null;
     lanes = [];
     laneKey = "";

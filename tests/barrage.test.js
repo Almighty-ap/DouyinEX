@@ -15,6 +15,9 @@ import {
   DM_SPEED_MS_MAX,
   DM_SPEED_MS_DEFAULT,
   clampSpeedMs,
+  pickLane,
+  OVERLAP_WAIT_MS,
+  OVERLAP_DROP_MS,
 } from "../src/lib/barrage.js";
 
 test("extractBarrage 拼接文字、识别图片与自己发的弹幕", () => {
@@ -89,6 +92,49 @@ test("clampSpeedMs 夹取原生速度（毫秒/整屏）并回退默认", () => 
   assert.equal(clampSpeedMs("abc"), DM_SPEED_MS_DEFAULT);
   assert.equal(clampSpeedMs(null), DM_SPEED_MS_DEFAULT);
   assert.equal(clampSpeedMs(-5), DM_SPEED_MS_DEFAULT);
+});
+
+test("pickLane 优先用已空出的轨道，没有空轨道才排队", () => {
+  const now = 10000;
+  assert.deepEqual(pickLane({ lanes: [5000, 12000] , now }), { lane: 0, startAt: now, drop: false });
+  assert.deepEqual(pickLane({ lanes: [12000, 9000], now }), { lane: 1, startAt: now, drop: false });
+  // 全占用：排到最早空出的轨道，等得不久就等（默认策略下 1.5 秒以内）
+  assert.deepEqual(pickLane({ lanes: [11000, 30000], now }), { lane: 0, startAt: 11000, drop: false });
+  assert.deepEqual(pickLane({ lanes: [now + OVERLAP_WAIT_MS], now }), {
+    lane: 0,
+    startAt: now + OVERLAP_WAIT_MS,
+    drop: false,
+  });
+  assert.deepEqual(pickLane({ lanes: [], now }), { lane: 0, startAt: now, drop: false });
+});
+
+test("pickLane 默认策略：等超过 1.5 秒就立刻出发（允许重叠），不丢弹幕", () => {
+  const now = 10000;
+  assert.deepEqual(pickLane({ lanes: [now + OVERLAP_WAIT_MS + 1, now + 99999], now }), {
+    lane: 0,
+    startAt: now,
+    drop: false,
+  });
+  // 开启「优先减少重叠」时不会立刻出发，而是继续等到轨道空出
+  assert.deepEqual(pickLane({ lanes: [now + OVERLAP_WAIT_MS + 1], now, avoidOverlap: true }), {
+    lane: 0,
+    startAt: now + OVERLAP_WAIT_MS + 1,
+    drop: false,
+  });
+});
+
+test("pickLane 优先减少重叠时，等超过 4 秒的这条丢弃", () => {
+  const now = 10000;
+  assert.deepEqual(pickLane({ lanes: [now + OVERLAP_DROP_MS], now, avoidOverlap: true }), {
+    lane: 0,
+    startAt: now + OVERLAP_DROP_MS,
+    drop: false,
+  });
+  assert.deepEqual(pickLane({ lanes: [now + OVERLAP_DROP_MS + 1], now, avoidOverlap: true }), {
+    lane: 0,
+    startAt: now + OVERLAP_DROP_MS + 1,
+    drop: true,
+  });
 });
 
 test("同一时刻多条弹幕占用不同轨道，轨道满则放不下", () => {
