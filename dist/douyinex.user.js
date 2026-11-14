@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DouyinEX-抖音直播间增强插件
 // @namespace    https://github.com/Almighty-ap/DouyinEX
-// @version      0.1.5
+// @version      0.1.6
 // @description  抖音直播间增强：复制直播流(原画/超清/高清) 自动最高画质 网页全屏/完全全屏 全屏净化 同步时间 滚轮调音量 弹幕接管与屏蔽 弹幕+1 弹幕收藏 循环发送弹幕 自动抢免费福袋 简洁模式
 // @author       DouyinEX
 // @license      MIT
