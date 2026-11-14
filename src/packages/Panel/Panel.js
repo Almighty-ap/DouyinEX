@@ -96,8 +96,8 @@ function favoriteRow(text) {
   label.className = "dyex-fav-text";
   label.textContent = text;
   label.title = "点击填充到发送框";
-  label.addEventListener("click", () => {
-    const ok = fillChat(text);
+  label.addEventListener("click", async () => {
+    const ok = await fillChat(text);
     toast(ok ? "已填充到发送框" : "填充失败：请确认已登录抖音，且聊天输入框可用", ok ? "success" : "error");
   });
 

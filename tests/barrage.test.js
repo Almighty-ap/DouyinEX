@@ -16,6 +16,7 @@ import {
   DM_SPEED_MS_DEFAULT,
   clampSpeedMs,
   pickLane,
+  clampActionsOffset,
   OVERLAP_WAIT_MS,
   OVERLAP_DROP_MS,
 } from "../src/lib/barrage.js";
@@ -135,6 +136,49 @@ test("pickLane 优先减少重叠时，等超过 4 秒的这条丢弃", () => {
     startAt: now + OVERLAP_DROP_MS + 1,
     drop: true,
   });
+});
+
+test("clampActionsOffset：操作行完全可见时不偏移", () => {
+  const lay = { layerLeft: 0, layerRight: 1000, layerTop: 0, layerBottom: 600 };
+  const off = clampActionsOffset({
+    rowLeft: 300, rowTop: 114, rowWidth: 77, rowHeight: 20, rowBottom: 134, itemTop: 85, ...lay,
+  });
+  assert.deepEqual(off, { dx: 0, dy: 0 });
+});
+
+test("clampActionsOffset：弹幕左端飘出画面时，操作行贴左边缘", () => {
+  const lay = { layerLeft: 0, layerRight: 1000, layerTop: 0, layerBottom: 600 };
+  // 实测样本：弹幕左端 x=-26 时操作行落在 -20（+1 只露 11px）
+  const off = clampActionsOffset({
+    rowLeft: -20, rowTop: 114, rowWidth: 77, rowHeight: 20, rowBottom: 134, itemTop: 85, ...lay,
+  });
+  assert.deepEqual(off, { dx: 20, dy: 0 });
+  // 左端整排都在画面外时，夹到左边缘（而不是继续往左跑）
+  const far = clampActionsOffset({
+    rowLeft: -400, rowTop: 114, rowWidth: 77, rowHeight: 20, rowBottom: 134, itemTop: 85, ...lay,
+  });
+  assert.deepEqual(far, { dx: 400, dy: 0 });
+});
+
+test("clampActionsOffset：弹幕刚进画面（操作行还在右边）时贴右边缘", () => {
+  const lay = { layerLeft: 0, layerRight: 1000, layerTop: 0, layerBottom: 600 };
+  const off = clampActionsOffset({
+    rowLeft: 1010, rowTop: 114, rowWidth: 77, rowHeight: 20, rowBottom: 134, itemTop: 85, ...lay,
+  });
+  assert.deepEqual(off, { dx: -87, dy: 0 }); // 1000 - 77 - 1010
+});
+
+test("clampActionsOffset：下方放不下时翻到文字上方，两边都放不下则维持下方", () => {
+  const bottomLane = clampActionsOffset({
+    rowLeft: 300, rowTop: 584, rowWidth: 77, rowHeight: 20, rowBottom: 604,
+    layerLeft: 0, layerRight: 1000, layerTop: 0, layerBottom: 600, itemTop: 555,
+  });
+  assert.deepEqual(bottomLane, { dx: 0, dy: -51 }); // 目标顶边 (555 - 20 - 2) 减去自然顶边 584
+  const topLane = clampActionsOffset({
+    rowLeft: 300, rowTop: 44, rowWidth: 77, rowHeight: 20, rowBottom: 64,
+    layerLeft: 0, layerRight: 1000, layerTop: 0, layerBottom: 40, itemTop: 15,
+  });
+  assert.deepEqual(topLane, { dx: 0, dy: 0 });
 });
 
 test("同一时刻多条弹幕占用不同轨道，轨道满则放不下", () => {

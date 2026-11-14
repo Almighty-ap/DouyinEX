@@ -262,7 +262,7 @@ export function isFullMode() {
   return isNativeFullscreen();
 }
 
-function isChatFolded() {
+export function isChatFolded() {
   if (document.querySelector('.chat_room_fold, [class*="chat_room_fold"]')) return true;
   const rightBg =
     document.getElementById("RightBackgroundLayout") || document.getElementById("chatroom");
@@ -292,19 +292,46 @@ function findUnfoldChatBtn() {
 let chatFoldedByUs = false;
 let lastFullState = false;
 
-async function foldChatWithRetry() {
+/** 点原生「折叠评论区」按钮（不带全屏/开关前置条件）；返回是否确实折叠上了 */
+async function clickFoldChatBtn() {
   for (let i = 0; i < 5; i++) {
-    if (!isFullMode() || !getSettings().fullscreenFoldChat) return;
-    if (isChatFolded()) return;
+    if (isChatFolded()) return true;
     const btn = findFoldChatBtn();
     if (btn) {
       btn.click();
       chatFoldedByUs = true;
       await sleep(250);
-      if (isChatFolded()) return;
+      if (isChatFolded()) return true;
     }
     await sleep(200);
   }
+  return false;
+}
+
+async function foldChatWithRetry() {
+  if (!isFullMode() || !getSettings().fullscreenFoldChat) return;
+  await clickFoldChatBtn();
+}
+
+/**
+ * 临时展开评论区，返回一个「折回去」的还原函数。
+ * 完全全屏下抖音会把整个评论区卸载（`#chatroom` display: none），聊天输入框随之不可用，
+ * 画面弹幕的 `+1` 就发不出去——这时先展开、发完再还原成折叠态（见 Chat/send.js）。
+ * 评论区本来就展开、或找不到展开按钮时返回 null。
+ */
+export async function ensureChatPanelOpen() {
+  if (!isChatFolded()) return null;
+  const btn = findUnfoldChatBtn();
+  if (!btn) return null;
+  btn.click();
+  for (let i = 0; i < 10; i++) {
+    await sleep(150);
+    if (!isChatFolded()) break;
+  }
+  if (isChatFolded()) return null;
+  return async () => {
+    await clickFoldChatBtn();
+  };
 }
 
 async function unfoldChatIfNeeded() {

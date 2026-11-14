@@ -5,6 +5,7 @@ import {
   matchKeywords,
   parseLevelFromSrc,
   createRepeatFilter,
+  isActionableChatText,
 } from "../src/lib/filter.js";
 
 test("parseKeywords 支持子串与正则，忽略空行与非法正则", () => {
@@ -27,6 +28,17 @@ test("parseLevelFromSrc 提取用户等级", () => {
   assert.equal(parseLevelFromSrc(src), 9);
   assert.equal(parseLevelFromSrc("https://x/y.png"), null);
   assert.equal(parseLevelFromSrc(undefined), null);
+});
+
+test("isActionableChatText 只给正常聊天正文挂 +1 / 收藏", () => {
+  assert.equal(isActionableChatText("小明：这波操作可以"), true);
+  assert.equal(isActionableChatText("  来了 "), false); // 进场提示
+  assert.equal(isActionableChatText("亚托狗史 来了"), false);
+  assert.equal(isActionableChatText(""), false); // 空正文（系统占位条目）
+  assert.equal(isActionableChatText("   "), false);
+  assert.equal(isActionableChatText(null), false);
+  assert.equal(isActionableChatText(undefined), false);
+  assert.equal(isActionableChatText("来了就别走"), true); // 只在结尾判定进场
 });
 
 test("createRepeatFilter 窗口内重复判定，过期后重置", () => {

@@ -107,6 +107,40 @@ export function pickLane({ lanes, now, avoidOverlap = false }) {
     : { lane, startAt: earliest, drop: false };
 }
 
+/**
+ * 操作行（`+1` / `收藏`）相对弹幕的偏移量：把它夹回播放器可见区。
+ *
+ * 操作行与弹幕文字左对齐，于是弹幕**左端飘出画面**之后按钮跟着出了左边；
+ * 反过来，弹幕**刚进画面**（左端还在画面右边缘外）时整排按钮又都还在右边——
+ * 这两段时间里都点不到（实测宽度 538px 的弹幕，前一种状态持续约 4.7 秒、占一趟的 1/3）。
+ * 另外显示区域选「全屏」时，最下面一条轨道的弹幕，操作行会被层底裁掉，需要翻到文字上方。
+ *
+ * 入参均为视口坐标（px）：`row*` 是操作行**未加偏移时**的自然矩形，`layer*` 是渲染层可见区，
+ * `itemTop` 是弹幕盒子顶边。返回 `{ dx, dy }`，调用方据此设 `translate(dx, dy)`。
+ */
+export function clampActionsOffset({
+  rowLeft,
+  rowTop,
+  rowWidth,
+  rowHeight,
+  rowBottom,
+  layerLeft,
+  layerRight,
+  layerTop,
+  layerBottom,
+  itemTop,
+}) {
+  // 水平：把左端夹进 [可见区左, 可见区右 - 操作行宽]；操作行比可见区还宽时贴左边缘
+  const maxLeft = Math.max(layerLeft, layerRight - rowWidth);
+  const dx = Math.round(Math.min(Math.max(rowLeft, layerLeft), maxLeft)) - Math.round(rowLeft);
+  // 垂直：下方放得下就维持下方；下方放不下但上方放得下就翻到文字上方；两边都放不下维持下方
+  const fitsBelow = rowBottom <= layerBottom - 1;
+  const aboveTop = itemTop - rowHeight - 2;
+  const fitsAbove = aboveTop >= layerTop + 1;
+  const dy = fitsBelow || !fitsAbove ? 0 : Math.round(aboveTop - rowTop);
+  return { dx, dy };
+}
+
 /** 可用轨道数：按 maxHeightRate 限制占用高度 */
 export function getLaneCount({ height, channelHeight, maxHeightRate }) {
   if (!height || !channelHeight) return 1;

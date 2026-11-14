@@ -112,6 +112,26 @@
     }
     return wait > OVERLAP_WAIT_MS ? { lane, startAt: now, drop: false } : { lane, startAt: earliest, drop: false };
   }
+  function clampActionsOffset({
+    rowLeft,
+    rowTop,
+    rowWidth,
+    rowHeight,
+    rowBottom,
+    layerLeft,
+    layerRight,
+    layerTop,
+    layerBottom,
+    itemTop
+  }) {
+    const maxLeft = Math.max(layerLeft, layerRight - rowWidth);
+    const dx = Math.round(Math.min(Math.max(rowLeft, layerLeft), maxLeft)) - Math.round(rowLeft);
+    const fitsBelow = rowBottom <= layerBottom - 1;
+    const aboveTop = itemTop - rowHeight - 2;
+    const fitsAbove = aboveTop >= layerTop + 1;
+    const dy = fitsBelow || !fitsAbove ? 0 : Math.round(aboveTop - rowTop);
+    return { dx, dy };
+  }
   function getLaneCount({ height, channelHeight, maxHeightRate }) {
     if (!height || !channelHeight) return 1;
     const usable = Math.min(height, (maxHeightRate || 1) * height);
@@ -279,7 +299,7 @@
   }
 
   // src/packages/Panel/Panel.css
-  var Panel_default = '#dyex-ball {\n  position: fixed; right: 16px; bottom: 200px; width: 40px; height: 40px;\n  border-radius: 50%; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.35);\n  cursor: grab; touch-action: none; z-index: 2147483000; display: flex; align-items: center;\n  justify-content: center; user-select: none; transition: transform .15s, opacity .2s;\n}\n#dyex-ball:hover { transform: scale(1.1); }\n#dyex-ball.is-dragging { cursor: grabbing; transition: none; transform: scale(1.08); }\n#dyex-ball.is-hidden { opacity: 0 !important; pointer-events: none !important; transform: scale(.75); }\n#dyex-ball svg { width: 30px; height: 30px; pointer-events: none; }\n\n#dyex-panel {\n  position: fixed; right: 64px; bottom: 80px; width: 340px; max-height: 70vh;\n  overflow-y: auto; background: rgba(22,22,26,.96); color: #eee; font-size: 13px;\n  border-radius: 10px; padding: 12px 14px; z-index: 2147483000;\n  box-shadow: 0 6px 24px rgba(0,0,0,.5); display: none; line-height: 1.6;\n}\n#dyex-panel.is-open { display: block; }\n#dyex-panel h4 { margin: 10px 0 6px; font-size: 13px; color: #fe2c55; }\n#dyex-panel h4:first-child { margin-top: 0; }\n#dyex-panel h4.dyex-fold { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }\n#dyex-panel .dyex-fold-arrow { display: inline-block; transition: transform .15s; }\n#dyex-panel h4.dyex-fold.is-open .dyex-fold-arrow { transform: rotate(90deg); }\n#dyex-panel .dyex-fold-body { display: none; }\n#dyex-panel .dyex-fold-body.is-open { display: block; }\n#dyex-panel label { display: flex; align-items: center; gap: 6px; cursor: pointer; }\n#dyex-panel input[type="text"], #dyex-panel input[type="number"], #dyex-panel textarea {\n  background: #2a2a30; color: #eee; border: 1px solid #444; border-radius: 4px;\n  padding: 3px 6px; font-size: 12px; box-sizing: border-box;\n}\n#dyex-panel textarea { width: 100%; resize: vertical; min-height: 56px; }\n#dyex-panel input[type="number"] { width: 64px; }\n#dyex-panel button {\n  background: #fe2c55; color: #fff; border: 0; border-radius: 4px;\n  padding: 3px 10px; font-size: 12px; cursor: pointer; margin: 2px 4px 2px 0;\n}\n#dyex-panel button.is-secondary { background: #3a3a42; }\n#dyex-panel .dyex-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; flex-wrap: wrap; }\n#dyex-panel .dyex-tip { color: #999; font-size: 12px; }\n#dyex-panel .dyex-grow { flex: 1; min-width: 0; }\n#dyex-panel input[type="range"] { width: 108px; accent-color: #fe2c55; }\n#dyex-panel .dyex-val { color: #fe2c55; min-width: 76px; font-size: 12px; }\n#dyex-panel select {\n  background: #2a2a30; color: #eee; border: 1px solid #444; border-radius: 4px;\n  padding: 3px 6px; font-size: 12px; box-sizing: border-box;\n}\n#dyex-panel .dyex-fav-list { max-height: 168px; overflow-y: auto; margin: 4px 0; }\n#dyex-panel .dyex-fav-item {\n  display: flex; align-items: center; gap: 6px; padding: 2px 0;\n  border-bottom: 1px solid #333;\n}\n#dyex-panel .dyex-fav-text {\n  flex: 1; min-width: 0; cursor: pointer; overflow: hidden;\n  text-overflow: ellipsis; white-space: nowrap;\n}\n#dyex-panel .dyex-fav-text:hover { color: #fe2c55; }\n#dyex-panel .dyex-fav-item button { padding: 1px 6px; font-size: 11px; margin: 0; }\n\n/* \u804A\u5929\u6761\u76EE\u7684\u60AC\u505C\u6309\u94AE\uFF1A\u7EDD\u5BF9\u5B9A\u4F4D\uFF0C\u4E0D\u53C2\u4E0E\u6761\u76EE\u6392\u7248\u3002\n   \u82E5\u6309\u884C\u5185\u5143\u7D20\u63D2\u5165\uFF0C\u6BCF\u6761\u6D88\u606F\u4F1A\u88AB\u6491\u9AD8\u4E00\u884C\uFF08\u5B9E\u6D4B\u5355\u884C\u6761\u76EE 34px \u2192 56px\uFF09\uFF0C\n   \u811A\u672C\u9010\u6761\u6CE8\u5165\u65F6\u5217\u8868\u5185\u5BB9\u4F1A\u6301\u7EED\u8DF3\u52A8\uFF0C\u53EF\u89C6\u6761\u6570\u4E5F\u51E0\u4E4E\u5C11\u4E00\u534A\u3002 */\n.webcast-chatroom___item { position: relative; }\n.dyex-plus1, .dyex-fav {\n  position: absolute; top: 50%; transform: translateY(-50%);\n  margin: 0; padding: 0 6px; border-radius: 8px; font-size: 12px; line-height: 18px;\n  white-space: nowrap; background: #fff;\n  border: 1px solid #fe2c55; color: #fe2c55; cursor: pointer; opacity: 0;\n  transition: opacity .15s; user-select: none;\n}\n.dyex-plus1 { right: 48px; }\n.dyex-fav { right: 4px; border-color: #f5a623; color: #f5a623; }\n.webcast-chatroom___item:hover .dyex-plus1, .webcast-chatroom___item:hover .dyex-fav {\n  opacity: 1;\n}\n\n/* \u63A5\u7BA1\u540E\u7684\u60AC\u6D6E\u5F39\u5E55\u5C42 */\n#dyex-dm-layer {\n  position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1;\n}\n/* \u6587\u5B57\u5728\u4E0A\u3001\u64CD\u4F5C\u884C\u5728\u4E0B\uFF1A\u5185\u8FB9\u8DDD\u6052\u5B9A\uFF0C\u60AC\u505C\u5C55\u5F00\u64CD\u4F5C\u884C\u65F6\u6587\u5B57\u4E0D\u4F1A\u8DF3\u4F4D */\n.dyex-dm-item {\n  position: absolute; left: 0; top: 0; display: flex; flex-direction: column;\n  align-items: flex-start; padding: 0 6px; pointer-events: auto;\n  user-select: none; line-height: 1.35; cursor: default;\n  text-shadow: -1px -1px 0 rgba(0,0,0,.8), 1px -1px 0 rgba(0,0,0,.8),\n    -1px 1px 0 rgba(0,0,0,.8), 1px 1px 0 rgba(0,0,0,.8), 0 0 2px rgba(0,0,0,.8);\n}\n.dyex-dm-text { white-space: nowrap; }\n.dyex-dm-item img { height: 1.15em; vertical-align: -.2em; }\n.dyex-dm-item.is-self { border: 1px solid rgba(255,255,255,.85); border-radius: 6px; }\n/* \u60AC\u505C\u4E2D\u7684\u5F39\u5E55\uFF1A\u7F6E\u9876\u5E76\u52A0\u5E95\u8272\uFF0C\u4FDD\u8BC1 +1 / \u6536\u85CF \u59CB\u7EC8\u70B9\u5728\u6700\u521D\u60F3\u64CD\u4F5C\u7684\u90A3\u4E00\u6761\u4E0A\u3002\n   \u60AC\u505C\u671F\u95F4\u5176\u4F59\u5F39\u5E55\u4E0D\u53C2\u4E0E\u547D\u4E2D\u6D4B\u8BD5\uFF0C\u540E\u98D8\u6765\u7684\u5F39\u5E55\u65E2\u76D6\u4E0D\u4F4F\u5B83\u4E5F\u62A2\u4E0D\u8D70\u60AC\u505C\u3002 */\n.dyex-dm-item.is-hover { z-index: 2; background: rgba(0,0,0,.55); border-radius: 6px; }\n#dyex-dm-layer.is-hovering .dyex-dm-item { pointer-events: none; }\n#dyex-dm-layer.is-hovering .dyex-dm-item.is-hover { pointer-events: auto; }\n/* +1 / \u6536\u85CF \u4E0B\u7F6E\u5728\u6587\u5B57\u4E0B\u65B9\u4E00\u884C\uFF1A\u9ED8\u8BA4\u4E0D\u5360\u4F4D\uFF08\u5BBD\u5EA6\u6D4B\u91CF\u4E0E\u8F68\u9053\u95F4\u8DDD\u4ECD\u6309\u6587\u5B57\u7B97\uFF09\uFF0C\u60AC\u505C\u624D\u5C55\u5F00\u3002\n   \u5DE6\u5BF9\u9F50\uFF0C\u5F39\u5E55\u53EA\u98D8\u8FDB\u753B\u9762\u534A\u622A\u65F6\u6309\u94AE\u4E5F\u4E00\u5B9A\u8DDF\u5728\u53EF\u89C1\u7684\u6587\u5B57\u4E0B\u9762\u3002 */\n.dyex-dm-actions { display: none; }\n.dyex-dm-item.is-hover .dyex-dm-actions {\n  display: flex; gap: 6px; margin-top: 2px; padding-bottom: 2px;\n}\n.dyex-dm-plus1, .dyex-dm-fav {\n  padding: 0 8px; border-radius: 9px; color: #fff; font-size: 12px; line-height: 18px;\n  white-space: nowrap; text-shadow: none; cursor: pointer;\n}\n.dyex-dm-plus1 { background: #fe2c55; }\n.dyex-dm-fav { background: #f5a623; }\n.dyex-dm-plus1:hover, .dyex-dm-fav:hover { filter: brightness(1.15); }\n\n#dyex-toast {\n  position: fixed; left: 50%; top: 80px; transform: translateX(-50%);\n  padding: 8px 16px; border-radius: 6px; background: rgba(0,0,0,.85); color: #fff;\n  font-size: 13px; z-index: 2147483647; opacity: 0; pointer-events: none;\n  transition: opacity .2s;\n}\n#dyex-toast.is-show { opacity: 1; }\n#dyex-toast[data-type="success"] { background: rgba(22,163,74,.92); }\n#dyex-toast[data-type="error"] { background: rgba(220,38,38,.92); }\n';
+  var Panel_default = '#dyex-ball {\r\n  position: fixed; right: 16px; bottom: 200px; width: 40px; height: 40px;\r\n  border-radius: 50%; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.35);\r\n  cursor: grab; touch-action: none; z-index: 2147483000; display: flex; align-items: center;\r\n  justify-content: center; user-select: none; transition: transform .15s, opacity .2s;\r\n}\r\n#dyex-ball:hover { transform: scale(1.1); }\r\n#dyex-ball.is-dragging { cursor: grabbing; transition: none; transform: scale(1.08); }\r\n#dyex-ball.is-hidden { opacity: 0 !important; pointer-events: none !important; transform: scale(.75); }\r\n#dyex-ball svg { width: 30px; height: 30px; pointer-events: none; }\r\n\r\n#dyex-panel {\r\n  position: fixed; right: 64px; bottom: 80px; width: 340px; max-height: 70vh;\r\n  overflow-y: auto; background: rgba(22,22,26,.96); color: #eee; font-size: 13px;\r\n  border-radius: 10px; padding: 12px 14px; z-index: 2147483000;\r\n  box-shadow: 0 6px 24px rgba(0,0,0,.5); display: none; line-height: 1.6;\r\n}\r\n#dyex-panel.is-open { display: block; }\r\n#dyex-panel h4 { margin: 10px 0 6px; font-size: 13px; color: #fe2c55; }\r\n#dyex-panel h4:first-child { margin-top: 0; }\r\n#dyex-panel h4.dyex-fold { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }\r\n#dyex-panel .dyex-fold-arrow { display: inline-block; transition: transform .15s; }\r\n#dyex-panel h4.dyex-fold.is-open .dyex-fold-arrow { transform: rotate(90deg); }\r\n#dyex-panel .dyex-fold-body { display: none; }\r\n#dyex-panel .dyex-fold-body.is-open { display: block; }\r\n#dyex-panel label { display: flex; align-items: center; gap: 6px; cursor: pointer; }\r\n#dyex-panel input[type="text"], #dyex-panel input[type="number"], #dyex-panel textarea {\r\n  background: #2a2a30; color: #eee; border: 1px solid #444; border-radius: 4px;\r\n  padding: 3px 6px; font-size: 12px; box-sizing: border-box;\r\n}\r\n#dyex-panel textarea { width: 100%; resize: vertical; min-height: 56px; }\r\n#dyex-panel input[type="number"] { width: 64px; }\r\n#dyex-panel button {\r\n  background: #fe2c55; color: #fff; border: 0; border-radius: 4px;\r\n  padding: 3px 10px; font-size: 12px; cursor: pointer; margin: 2px 4px 2px 0;\r\n}\r\n#dyex-panel button.is-secondary { background: #3a3a42; }\r\n#dyex-panel .dyex-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; flex-wrap: wrap; }\r\n#dyex-panel .dyex-tip { color: #999; font-size: 12px; }\r\n#dyex-panel .dyex-grow { flex: 1; min-width: 0; }\r\n#dyex-panel input[type="range"] { width: 108px; accent-color: #fe2c55; }\r\n#dyex-panel .dyex-val { color: #fe2c55; min-width: 76px; font-size: 12px; }\r\n#dyex-panel select {\r\n  background: #2a2a30; color: #eee; border: 1px solid #444; border-radius: 4px;\r\n  padding: 3px 6px; font-size: 12px; box-sizing: border-box;\r\n}\r\n#dyex-panel .dyex-fav-list { max-height: 168px; overflow-y: auto; margin: 4px 0; }\r\n#dyex-panel .dyex-fav-item {\r\n  display: flex; align-items: center; gap: 6px; padding: 2px 0;\r\n  border-bottom: 1px solid #333;\r\n}\r\n#dyex-panel .dyex-fav-text {\r\n  flex: 1; min-width: 0; cursor: pointer; overflow: hidden;\r\n  text-overflow: ellipsis; white-space: nowrap;\r\n}\r\n#dyex-panel .dyex-fav-text:hover { color: #fe2c55; }\r\n#dyex-panel .dyex-fav-item button { padding: 1px 6px; font-size: 11px; margin: 0; }\r\n\r\n/* \u804A\u5929\u6761\u76EE\u7684\u60AC\u505C\u6309\u94AE\uFF1A\u7EDD\u5BF9\u5B9A\u4F4D\uFF0C\u4E0D\u53C2\u4E0E\u6761\u76EE\u6392\u7248\u3002\r\n   \u82E5\u6309\u884C\u5185\u5143\u7D20\u63D2\u5165\uFF0C\u6BCF\u6761\u6D88\u606F\u4F1A\u88AB\u6491\u9AD8\u4E00\u884C\uFF08\u5B9E\u6D4B\u5355\u884C\u6761\u76EE 34px \u2192 56px\uFF09\uFF0C\r\n   \u811A\u672C\u9010\u6761\u6CE8\u5165\u65F6\u5217\u8868\u5185\u5BB9\u4F1A\u6301\u7EED\u8DF3\u52A8\uFF0C\u53EF\u89C6\u6761\u6570\u4E5F\u51E0\u4E4E\u5C11\u4E00\u534A\u3002 */\r\n.webcast-chatroom___item { position: relative; }\r\n.dyex-plus1, .dyex-fav {\r\n  position: absolute; top: 50%; transform: translateY(-50%);\r\n  margin: 0; padding: 0 6px; border-radius: 8px; font-size: 12px; line-height: 18px;\r\n  white-space: nowrap; background: #fff;\r\n  border: 1px solid #fe2c55; color: #fe2c55; cursor: pointer; opacity: 0;\r\n  transition: opacity .15s; user-select: none;\r\n}\r\n.dyex-plus1 { right: 48px; }\r\n.dyex-fav { right: 4px; border-color: #f5a623; color: #f5a623; }\r\n.webcast-chatroom___item:hover .dyex-plus1, .webcast-chatroom___item:hover .dyex-fav {\r\n  opacity: 1;\r\n}\r\n\r\n/* \u63A5\u7BA1\u540E\u7684\u60AC\u6D6E\u5F39\u5E55\u5C42 */\r\n#dyex-dm-layer {\r\n  position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1;\r\n}\r\n/* \u6587\u5B57\u5728\u4E0A\u3001\u64CD\u4F5C\u884C\u5728\u4E0B\uFF1A\u5185\u8FB9\u8DDD\u6052\u5B9A\uFF0C\u60AC\u505C\u5C55\u5F00\u64CD\u4F5C\u884C\u65F6\u6587\u5B57\u4E0D\u4F1A\u8DF3\u4F4D */\r\n.dyex-dm-item {\r\n  position: absolute; left: 0; top: 0; display: flex; flex-direction: column;\r\n  align-items: flex-start; padding: 0 6px; pointer-events: auto;\r\n  user-select: none; line-height: 1.35; cursor: default;\r\n  text-shadow: -1px -1px 0 rgba(0,0,0,.8), 1px -1px 0 rgba(0,0,0,.8),\r\n    -1px 1px 0 rgba(0,0,0,.8), 1px 1px 0 rgba(0,0,0,.8), 0 0 2px rgba(0,0,0,.8);\r\n}\r\n.dyex-dm-text { white-space: nowrap; }\r\n.dyex-dm-item img { height: 1.15em; vertical-align: -.2em; }\r\n.dyex-dm-item.is-self { border: 1px solid rgba(255,255,255,.85); border-radius: 6px; }\r\n/* \u60AC\u505C\u4E2D\u7684\u5F39\u5E55\uFF1A\u7F6E\u9876\u5E76\u52A0\u5E95\u8272\uFF0C\u4FDD\u8BC1 +1 / \u6536\u85CF \u59CB\u7EC8\u70B9\u5728\u6700\u521D\u60F3\u64CD\u4F5C\u7684\u90A3\u4E00\u6761\u4E0A\u3002\r\n   \u60AC\u505C\u671F\u95F4\u5176\u4F59\u5F39\u5E55\u4E0D\u53C2\u4E0E\u547D\u4E2D\u6D4B\u8BD5\uFF0C\u540E\u98D8\u6765\u7684\u5F39\u5E55\u65E2\u76D6\u4E0D\u4F4F\u5B83\u4E5F\u62A2\u4E0D\u8D70\u60AC\u505C\u3002 */\r\n.dyex-dm-item.is-hover { z-index: 2; background: rgba(0,0,0,.55); border-radius: 6px; }\r\n#dyex-dm-layer.is-hovering .dyex-dm-item { pointer-events: none; }\r\n#dyex-dm-layer.is-hovering .dyex-dm-item.is-hover { pointer-events: auto; }\r\n/* +1 / \u6536\u85CF \u4E0B\u7F6E\u5728\u6587\u5B57\u4E0B\u65B9\u4E00\u884C\uFF1A\u9ED8\u8BA4\u4E0D\u5360\u4F4D\uFF08\u5BBD\u5EA6\u6D4B\u91CF\u4E0E\u8F68\u9053\u95F4\u8DDD\u4ECD\u6309\u6587\u5B57\u7B97\uFF09\uFF0C\u60AC\u505C\u624D\u5C55\u5F00\u3002\r\n   \u5DE6\u5BF9\u9F50\uFF0C\u5F39\u5E55\u53EA\u98D8\u8FDB\u753B\u9762\u534A\u622A\u65F6\u6309\u94AE\u4E5F\u4E00\u5B9A\u8DDF\u5728\u53EF\u89C1\u7684\u6587\u5B57\u4E0B\u9762\u3002 */\r\n.dyex-dm-actions { display: none; }\r\n.dyex-dm-item.is-hover .dyex-dm-actions {\r\n  display: flex; gap: 6px; margin-top: 2px; padding-bottom: 2px;\r\n}\r\n.dyex-dm-plus1, .dyex-dm-fav {\r\n  padding: 0 8px; border-radius: 9px; color: #fff; font-size: 12px; line-height: 18px;\r\n  white-space: nowrap; text-shadow: none; cursor: pointer;\r\n}\r\n.dyex-dm-plus1 { background: #fe2c55; }\r\n.dyex-dm-fav { background: #f5a623; }\r\n.dyex-dm-plus1:hover, .dyex-dm-fav:hover { filter: brightness(1.15); }\r\n\r\n#dyex-toast {\r\n  position: fixed; left: 50%; top: 80px; transform: translateX(-50%);\r\n  padding: 8px 16px; border-radius: 6px; background: rgba(0,0,0,.85); color: #fff;\r\n  font-size: 13px; z-index: 2147483647; opacity: 0; pointer-events: none;\r\n  transition: opacity .2s;\r\n}\r\n#dyex-toast.is-show { opacity: 1; }\r\n#dyex-toast[data-type="success"] { background: rgba(22,163,74,.92); }\r\n#dyex-toast[data-type="error"] { background: rgba(220,38,38,.92); }\r\n';
 
   // src/common/dom.js
   function sleep(ms) {
@@ -435,124 +455,6 @@
       if (now && now !== before) return true;
     }
     return false;
-  }
-
-  // src/packages/Chat/historyStore.js
-  var selfSendAt = 0;
-  function markSelfSend() {
-    selfSendAt = Date.now();
-  }
-  function isSelfSendRecent(ms = 2e3) {
-    return Date.now() - selfSendAt < ms;
-  }
-  function recordSent(text) {
-    const cur = getSettings().chatHistory;
-    const next = pushHistory(cur, text);
-    if (next.length === cur.length && next.every((v, i) => v === cur[i])) return false;
-    setSetting("chatHistory", next);
-    return true;
-  }
-
-  // src/packages/Chat/send.js
-  var CHAT_EDITOR = ".webcast-chatroom___input-container .editor-kit-container";
-  var SEND_BTN = ".webcast-chatroom___send-btn";
-  var ZERO_WIDTH = String.fromCharCode(8203);
-  var CLEAR_POLL_MS = 250;
-  var CLEAR_POLL_TIMES = 10;
-  function findChatInput() {
-    return document.querySelector(CHAT_EDITOR);
-  }
-  function getEditorText(el) {
-    return el.innerText.split(ZERO_WIDTH).join("").trim();
-  }
-  function setEditorText(el, text) {
-    if (!el) return false;
-    const value = text == null ? "" : String(text);
-    const write = () => {
-      el.focus();
-      document.execCommand("selectAll", false);
-      return value ? document.execCommand("insertText", false, value) : document.execCommand("delete", false);
-    };
-    const ok = write();
-    if (ok && getEditorText(el) !== value) write();
-    return ok;
-  }
-  function fillChat(text) {
-    const input = findChatInput();
-    if (!input) return false;
-    return setEditorText(input, text);
-  }
-  function isEditorEmpty() {
-    const input = findChatInput();
-    return !input || getEditorText(input) === "";
-  }
-  async function waitEditorCleared() {
-    for (let i = 0; i < CLEAR_POLL_TIMES; i++) {
-      await sleep(CLEAR_POLL_MS);
-      if (isEditorEmpty()) return true;
-    }
-    return false;
-  }
-  async function sendChat(text, { record = true } = {}) {
-    const input = findChatInput();
-    if (!input) return false;
-    if (!setEditorText(input, text)) return false;
-    await sleep(80);
-    const btn = document.querySelector(SEND_BTN);
-    if (!btn || btn.classList.contains("disable")) return false;
-    markSelfSend();
-    btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    if (record && await waitEditorCleared()) recordSent(text);
-    return true;
-  }
-
-  // src/packages/Chat/Loop.js
-  var timer = null;
-  var stopTimer = null;
-  var offset = 0;
-  var running = false;
-  var onStateChange = () => {
-  };
-  function isLoopRunning() {
-    return running;
-  }
-  function onLoopState(fn) {
-    onStateChange = fn;
-  }
-  function parseTexts() {
-    return String(getSettings().loopTexts || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-  }
-  async function tick() {
-    if (!running) return;
-    const s = getSettings();
-    const texts = parseTexts();
-    if (!texts.length) return stopLoop();
-    const idx = s.loopRandom ? randomInt(0, texts.length - 1) : offset++ % texts.length;
-    const ok = await sendChat(texts[idx], { record: false });
-    if (!ok) {
-      toast("\u53D1\u9001\u5931\u8D25\uFF1A\u8BF7\u786E\u8BA4\u5DF2\u767B\u5F55\u6296\u97F3\uFF0C\u4E14\u804A\u5929\u8F93\u5165\u6846\u53EF\u7528\uFF0C\u5FAA\u73AF\u5DF2\u505C\u6B62", "error");
-      return stopLoop();
-    }
-    timer = setTimeout(tick, randomInt(s.loopMin, s.loopMax));
-  }
-  function startLoop() {
-    if (running) return;
-    const s = getSettings();
-    if (!parseTexts().length) {
-      toast("\u8BF7\u5148\u586B\u5199\u5FAA\u73AF\u53D1\u9001\u7684\u5F39\u5E55\uFF08\u4E00\u884C\u4E00\u6761\uFF09", "error");
-      return;
-    }
-    running = true;
-    offset = 0;
-    stopTimer = setTimeout(stopLoop, Math.max(1, s.loopLimitMin) * 60 * 1e3);
-    onStateChange(true);
-    tick();
-  }
-  function stopLoop() {
-    running = false;
-    clearTimeout(timer);
-    clearTimeout(stopTimer);
-    onStateChange(false);
   }
 
   // src/packages/Player/Player.js
@@ -799,19 +701,37 @@ iframe[data-container-id^="@annie/"],
   }
   var chatFoldedByUs = false;
   var lastFullState = false;
-  async function foldChatWithRetry() {
+  async function clickFoldChatBtn() {
     for (let i = 0; i < 5; i++) {
-      if (!isFullMode() || !getSettings().fullscreenFoldChat) return;
-      if (isChatFolded()) return;
+      if (isChatFolded()) return true;
       const btn = findFoldChatBtn();
       if (btn) {
         btn.click();
         chatFoldedByUs = true;
         await sleep(250);
-        if (isChatFolded()) return;
+        if (isChatFolded()) return true;
       }
       await sleep(200);
     }
+    return false;
+  }
+  async function foldChatWithRetry() {
+    if (!isFullMode() || !getSettings().fullscreenFoldChat) return;
+    await clickFoldChatBtn();
+  }
+  async function ensureChatPanelOpen() {
+    if (!isChatFolded()) return null;
+    const btn = findUnfoldChatBtn();
+    if (!btn) return null;
+    btn.click();
+    for (let i = 0; i < 10; i++) {
+      await sleep(150);
+      if (!isChatFolded()) break;
+    }
+    if (isChatFolded()) return null;
+    return async () => {
+      await clickFoldChatBtn();
+    };
   }
   async function unfoldChatIfNeeded() {
     if (!chatFoldedByUs) return;
@@ -1218,6 +1138,209 @@ iframe[data-container-id^="@annie/"],
     });
   }
 
+  // src/packages/Chat/historyStore.js
+  var selfSendAt = 0;
+  function markSelfSend() {
+    selfSendAt = Date.now();
+  }
+  function isSelfSendRecent(ms = 2e3) {
+    return Date.now() - selfSendAt < ms;
+  }
+  function recordSent(text) {
+    const cur = getSettings().chatHistory;
+    const next = pushHistory(cur, text);
+    if (next.length === cur.length && next.every((v, i) => v === cur[i])) return false;
+    setSetting("chatHistory", next);
+    return true;
+  }
+
+  // src/packages/Chat/send.js
+  var CHAT_EDITOR = ".webcast-chatroom___input-container .editor-kit-container";
+  var SEND_BTN = ".webcast-chatroom___send-btn";
+  var ZERO_WIDTH = String.fromCharCode(8203);
+  var CLEAR_POLL_MS = 250;
+  var CLEAR_POLL_TIMES = 10;
+  function findChatInput() {
+    return document.querySelector(CHAT_EDITOR);
+  }
+  function getEditorText(el) {
+    return el.innerText.split(ZERO_WIDTH).join("").trim();
+  }
+  function isChatInputReady(el = findChatInput()) {
+    if (!el || !el.isConnected) return false;
+    return el.getClientRects().length > 0;
+  }
+  function editorFocused(el) {
+    const active = document.activeElement;
+    return active === el || !!active && el.contains(active);
+  }
+  function setEditorText(el, text) {
+    if (!el) return false;
+    const value = text == null ? "" : String(text);
+    const write = () => {
+      el.focus();
+      if (!editorFocused(el)) return false;
+      document.execCommand("selectAll", false);
+      return value ? document.execCommand("insertText", false, value) : document.execCommand("delete", false);
+    };
+    let ok = write();
+    if (ok && getEditorText(el) !== value) ok = write();
+    if (!ok) clearPageSelection(el);
+    return ok;
+  }
+  function clearPageSelection(el) {
+    const sel = el.ownerDocument && el.ownerDocument.getSelection && el.ownerDocument.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    if (sel.anchorNode === el || el.contains(sel.anchorNode)) return;
+    sel.removeAllRanges();
+  }
+  async function fillChat(text) {
+    if (isChatInputReady()) return setEditorText(findChatInput(), text);
+    if (setTextareaValue(findPlayerBarInput(), text)) return true;
+    return withUnfoldedChat(() => {
+      const input = findChatInput();
+      return isChatInputReady(input) ? setEditorText(input, text) : false;
+    });
+  }
+  function isEditorEmpty() {
+    const input = findChatInput();
+    return !input || getEditorText(input) === "";
+  }
+  async function waitEditorCleared() {
+    for (let i = 0; i < CLEAR_POLL_TIMES; i++) {
+      await sleep(CLEAR_POLL_MS);
+      if (isEditorEmpty()) return true;
+    }
+    return false;
+  }
+  function findPlayerBarInput() {
+    return document.querySelector('.douyin-player textarea[placeholder="\u8BF4\u70B9\u4EC0\u4E48"]') || [...document.querySelectorAll(".douyin-player textarea")].find((t) => t.isConnected) || null;
+  }
+  function setTextareaValue(el, value) {
+    if (!el) return false;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    if (!setter) return false;
+    el.focus();
+    setter.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  }
+  function pressEnter(el) {
+    const opts = {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true,
+      composed: true
+    };
+    for (const type of ["keydown", "keypress", "keyup"]) {
+      el.dispatchEvent(new KeyboardEvent(type, opts));
+    }
+  }
+  async function sendViaPlayerBar(text) {
+    const bar = findPlayerBarInput();
+    if (!bar || !setTextareaValue(bar, text)) return false;
+    await sleep(60);
+    markSelfSend();
+    pressEnter(bar);
+    for (let i = 0; i < 8; i++) {
+      await sleep(120);
+      if (!bar.isConnected || bar.value === "") return true;
+    }
+    if (bar.isConnected && bar.value) setTextareaValue(bar, "");
+    return false;
+  }
+  async function waitInputReady(timeout = 1500) {
+    const end = Date.now() + timeout;
+    while (Date.now() < end) {
+      if (isChatInputReady()) return true;
+      await sleep(100);
+    }
+    return false;
+  }
+  async function withUnfoldedChat(fn) {
+    const restore = await ensureChatPanelOpen();
+    if (!restore) return false;
+    try {
+      await waitInputReady();
+      return await fn();
+    } finally {
+      await restore();
+    }
+  }
+  async function sendViaEditor(text, record) {
+    const input = findChatInput();
+    if (!isChatInputReady(input)) return false;
+    if (!setEditorText(input, text)) return false;
+    await sleep(80);
+    const btn = document.querySelector(SEND_BTN);
+    if (!btn || btn.classList.contains("disable")) return false;
+    markSelfSend();
+    btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    if (record && await waitEditorCleared()) recordSent(text);
+    return true;
+  }
+  async function sendChat(text, { record = true } = {}) {
+    if (isChatInputReady()) {
+      if (await sendViaEditor(text, record)) return true;
+    } else if (await sendViaPlayerBar(text)) {
+      if (record) recordSent(text);
+      return true;
+    }
+    return withUnfoldedChat(() => sendViaEditor(text, record));
+  }
+
+  // src/packages/Chat/Loop.js
+  var timer = null;
+  var stopTimer = null;
+  var offset = 0;
+  var running = false;
+  var onStateChange = () => {
+  };
+  function isLoopRunning() {
+    return running;
+  }
+  function onLoopState(fn) {
+    onStateChange = fn;
+  }
+  function parseTexts() {
+    return String(getSettings().loopTexts || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  }
+  async function tick() {
+    if (!running) return;
+    const s = getSettings();
+    const texts = parseTexts();
+    if (!texts.length) return stopLoop();
+    const idx = s.loopRandom ? randomInt(0, texts.length - 1) : offset++ % texts.length;
+    const ok = await sendChat(texts[idx], { record: false });
+    if (!ok) {
+      toast("\u53D1\u9001\u5931\u8D25\uFF1A\u8BF7\u786E\u8BA4\u5DF2\u767B\u5F55\u6296\u97F3\uFF0C\u4E14\u804A\u5929\u8F93\u5165\u6846\u53EF\u7528\uFF0C\u5FAA\u73AF\u5DF2\u505C\u6B62", "error");
+      return stopLoop();
+    }
+    timer = setTimeout(tick, randomInt(s.loopMin, s.loopMax));
+  }
+  function startLoop() {
+    if (running) return;
+    const s = getSettings();
+    if (!parseTexts().length) {
+      toast("\u8BF7\u5148\u586B\u5199\u5FAA\u73AF\u53D1\u9001\u7684\u5F39\u5E55\uFF08\u4E00\u884C\u4E00\u6761\uFF09", "error");
+      return;
+    }
+    running = true;
+    offset = 0;
+    stopTimer = setTimeout(stopLoop, Math.max(1, s.loopLimitMin) * 60 * 1e3);
+    onStateChange(true);
+    tick();
+  }
+  function stopLoop() {
+    running = false;
+    clearTimeout(timer);
+    clearTimeout(stopTimer);
+    onStateChange(false);
+  }
+
   // src/packages/Panel/Panel.js
   var BALL_SVG = `<svg viewBox="0 0 108 108" xmlns="http://www.w3.org/2000/svg">
 <circle cx="54" cy="54" r="50" fill="#16161a"/><path d="M54 6a48 48 0 0 0-48 48h30a18 18 0 0 1 36 0h30A48 48 0 0 0 54 6z" fill="#fe2c55"/>
@@ -1299,8 +1422,8 @@ iframe[data-container-id^="@annie/"],
     label.className = "dyex-fav-text";
     label.textContent = text;
     label.title = "\u70B9\u51FB\u586B\u5145\u5230\u53D1\u9001\u6846";
-    label.addEventListener("click", () => {
-      const ok = fillChat(text);
+    label.addEventListener("click", async () => {
+      const ok = await fillChat(text);
       toast(ok ? "\u5DF2\u586B\u5145\u5230\u53D1\u9001\u6846" : "\u586B\u5145\u5931\u8D25\uFF1A\u8BF7\u786E\u8BA4\u5DF2\u767B\u5F55\u6296\u97F3\uFF0C\u4E14\u804A\u5929\u8F93\u5165\u6846\u53EF\u7528", ok ? "success" : "error");
     });
     const send = document.createElement("button");
@@ -1591,6 +1714,10 @@ iframe[data-container-id^="@annie/"],
     const m = String(src || "").match(/user_grade_level_v\d+_(\d+)/);
     return m ? Number(m[1]) : null;
   }
+  function isActionableChatText(text) {
+    const t = String(text == null ? "" : text).trim();
+    return !!t && !/来了$/.test(t);
+  }
   function createRepeatFilter(windowMs = 1e4, max = 200) {
     const seen = /* @__PURE__ */ new Map();
     return function isRepeat3(text, now = Date.now()) {
@@ -1635,6 +1762,7 @@ iframe[data-container-id^="@annie/"],
   var SYSTEM_MSG = ".webcast-chatroom__room-message";
   var PLUS_CLASS = "dyex-plus1";
   var FAV_CLASS = "dyex-fav";
+  var LIST = ".webcast-chatroom___list";
   var BTN_ATTR = "data-dyex-btn";
   var rules = [];
   var rulesRaw = null;
@@ -1690,8 +1818,9 @@ iframe[data-container-id^="@annie/"],
     if (item.querySelector(`[${BTN_ATTR}]`)) return;
     if (isGiftMessage(item)) return;
     const itemText = getItemText(item);
+    if (!isActionableChatText(itemText)) return;
     const text = getContentOnly(itemText);
-    if (!text || /来了$/.test(itemText)) return;
+    if (!text) return;
     if (getSettings().plus1) {
       const plus = document.createElement("span");
       plus.className = PLUS_CLASS;
@@ -1706,6 +1835,14 @@ iframe[data-container-id^="@annie/"],
       item.appendChild(plus);
     }
     item.appendChild(makeFavoriteButton(FAV_CLASS, (e) => textAtEvent(e, text)));
+  }
+  function ensureButtonsOnHover(e) {
+    const node = e.target;
+    const item = node && node.closest ? node.closest(ITEM) : null;
+    if (!item) return;
+    if (item.hasAttribute(HIDDEN_ATTR)) return;
+    if (item.querySelector(`[${BTN_ATTR}]`)) return;
+    addButtons(item);
   }
   var HIDDEN_ATTR = "data-dyex-hidden";
   var handled = /* @__PURE__ */ new WeakSet();
@@ -1726,6 +1863,7 @@ iframe[data-container-id^="@annie/"],
       el.removeAttribute(HIDDEN_ATTR);
     });
     document.querySelectorAll(`[${BTN_ATTR}]`).forEach((el) => el.remove());
+    resolveList();
     document.querySelectorAll(ITEM).forEach(processItem);
   }
   var RESCAN_KEYS = /* @__PURE__ */ new Set([
@@ -1736,21 +1874,39 @@ iframe[data-container-id^="@annie/"],
     "plus1",
     "simpleMode"
   ]);
+  function isElement(node) {
+    return !!node && node.nodeType === 1 && typeof node.matches === "function";
+  }
   function scan(node) {
-    if (!(node instanceof HTMLElement)) return;
+    if (!isElement(node)) return;
     if (node.matches(ITEM)) processItem(node);
     node.querySelectorAll?.(ITEM).forEach(processItem);
   }
-  async function initChatShield() {
-    const list = await waitFor(".webcast-chatroom___list", 3e4);
-    if (!list) return;
-    list.querySelectorAll(ITEM).forEach(processItem);
+  var listEl = null;
+  var observer = null;
+  var listTimer = null;
+  function resolveList() {
+    const found = document.querySelector(LIST);
+    if (found && found === listEl && found.isConnected) return listEl;
+    observer?.disconnect();
+    observer = null;
+    listEl = found || null;
+    if (!listEl) return null;
+    listEl.querySelectorAll(ITEM).forEach(processItem);
+    observer = new MutationObserver((muts) => {
+      for (const m of muts) for (const n of m.addedNodes) scan(n);
+    });
+    observer.observe(listEl, { childList: true, subtree: true });
+    return listEl;
+  }
+  function initChatShield() {
+    resolveList();
+    clearInterval(listTimer);
+    listTimer = setInterval(resolveList, 2e3);
+    document.addEventListener("mouseover", ensureButtonsOnHover);
     onSettingChange((key) => {
       if (RESCAN_KEYS.has(key)) rescanAll();
     });
-    new MutationObserver((muts) => {
-      for (const m of muts) m.addedNodes.forEach(scan);
-    }).observe(list, { childList: true, subtree: true });
   }
 
   // src/packages/Chat/History.js
@@ -1880,6 +2036,7 @@ iframe[data-container-id^="@annie/"],
   var laneKey = "";
   var hoverEl = null;
   var leaveTimer = null;
+  var anims = /* @__PURE__ */ new WeakMap();
   function refreshRules2() {
     const raw = getSettings().shieldKeywords;
     if (raw !== rulesRaw2) {
@@ -2021,34 +2178,97 @@ iframe[data-container-id^="@annie/"],
     clearTimeout(leaveTimer);
     leaveTimer = null;
   }
-  function beginHover(layer, el, anim) {
+  function pointerOver(el) {
+    try {
+      return el.matches(":hover");
+    } catch (_) {
+      return false;
+    }
+  }
+  function placeActions(layer, el) {
+    const row = el.querySelector(`.${ACTIONS_CLS}`);
+    if (!row) return;
+    const prevDx = Number(row.dataset.dyexDx) || 0;
+    const prevDy = Number(row.dataset.dyexDy) || 0;
+    const rr = row.getBoundingClientRect();
+    const ir = el.getBoundingClientRect();
+    const lr = layer.getBoundingClientRect();
+    const { dx, dy } = clampActionsOffset({
+      rowLeft: rr.left - prevDx,
+      rowTop: rr.top - prevDy,
+      rowWidth: rr.width,
+      rowHeight: rr.height,
+      rowBottom: rr.top - prevDy + rr.height,
+      layerLeft: lr.left,
+      layerRight: lr.right,
+      layerTop: lr.top,
+      layerBottom: lr.bottom,
+      itemTop: ir.top
+    });
+    if (dx === prevDx && dy === prevDy) return;
+    row.dataset.dyexDx = String(dx);
+    row.dataset.dyexDy = String(dy);
+    row.style.transform = dx || dy ? `translate(${dx}px, ${dy}px)` : "";
+  }
+  function releaseHover(layer) {
+    cancelLeave();
+    const el = hoverEl;
+    if (!el) return;
+    hoverEl = null;
+    el.classList.remove("is-hover");
+    layer.classList.remove("is-hovering");
+    const row = el.querySelector(`.${ACTIONS_CLS}`);
+    if (row) {
+      row.style.transform = "";
+      delete row.dataset.dyexDx;
+      delete row.dataset.dyexDy;
+    }
+    const anim = anims.get(el);
+    if (anim && anim.playState === "paused") {
+      try {
+        anim.play();
+      } catch (_) {
+      }
+    }
+  }
+  function beginHover(layer, el) {
     if (hoverEl && !hoverEl.isConnected) hoverEl = null;
     if (hoverEl === el) {
       cancelLeave();
       return;
     }
+    if (hoverEl && !pointerOver(hoverEl)) releaseHover(layer);
     if (hoverEl) return;
     cancelLeave();
     hoverEl = el;
     el.classList.add("is-hover");
     layer.classList.add("is-hovering");
-    anim.pause();
+    const anim = anims.get(el);
+    if (anim) {
+      try {
+        anim.pause();
+      } catch (_) {
+      }
+    }
+    placeActions(layer, el);
   }
-  function endHover(layer, el, anim) {
-    cancelLeave();
-    if (hoverEl !== el) return;
-    hoverEl = null;
-    el.classList.remove("is-hover");
-    layer.classList.remove("is-hovering");
-    if (anim.playState === "paused") anim.play();
-  }
-  function scheduleEndHover(layer, el, anim) {
+  function scheduleEndHover(layer, el) {
     if (hoverEl !== el) return;
     cancelLeave();
     leaveTimer = setTimeout(() => {
       leaveTimer = null;
-      endHover(layer, el, anim);
+      releaseHover(layer);
     }, HOVER_GRACE_MS);
+  }
+  function dropStaleHover() {
+    if (!hoverEl) return;
+    const layer = document.getElementById(LAYER_ID);
+    if (!layer) return;
+    if (!hoverEl.isConnected || !document.hasFocus() || !pointerOver(hoverEl)) {
+      releaseHover(layer);
+      return;
+    }
+    placeActions(layer, hoverEl);
   }
   function renderItem(payload, parts, text, isSelf = false, allowPlus1 = true) {
     const layer = ensureLayer();
@@ -2121,12 +2341,13 @@ iframe[data-container-id^="@annie/"],
       // delay + fill: both：排队期间停在屏幕右侧外（layer 已 overflow: hidden），到点才出发
       { duration, delay: startAt - now, easing: "linear", fill: "both" }
     );
+    anims.set(el, anim);
     anim.onfinish = () => {
-      endHover(layer, el, anim);
+      if (hoverEl === el) releaseHover(layer);
       el.remove();
     };
-    el.addEventListener("mouseenter", () => beginHover(layer, el, anim));
-    el.addEventListener("mouseleave", () => scheduleEndHover(layer, el, anim));
+    el.addEventListener("mouseenter", () => beginHover(layer, el));
+    el.addEventListener("mouseleave", () => scheduleEndHover(layer, el));
     return true;
   }
   function clearLayer() {
@@ -2152,6 +2373,7 @@ iframe[data-container-id^="@annie/"],
   }
   function tick2() {
     try {
+      dropStaleHover();
       const fiber = findComponent();
       if (!fiber) return;
       const { inst, config } = readPluginState(fiber);
@@ -2175,6 +2397,7 @@ iframe[data-container-id^="@annie/"],
   function initDanmakuLayer() {
     tick2();
     setInterval(tick2, 1e3);
+    setInterval(dropStaleHover, 250);
     onSettingChange((key, value) => {
       if (key !== "danmakuTakeover") return;
       if (!value) {

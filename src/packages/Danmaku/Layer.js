@@ -8,6 +8,7 @@ import {
   resolveArea,
   speedLevelToPps,
   clampSpeedMs,
+  clampActionsOffset,
 } from "../../lib/barrage.js";
 import { sendChat } from "../Chat/send.js";
 import { makeFavoriteButton } from "../Chat/collect.js";
@@ -63,6 +64,8 @@ let laneKey = "";
 let hoverEl = null;
 // 待执行的「解除悬停」定时器（鼠标滑出后的宽限期，见 HOVER_GRACE_MS）
 let leaveTimer = null;
+// 弹幕元素 -> 它的动画：悬停被撤销时要把它 play() 回来，这里统一取用
+const anims = new WeakMap();
 
 function refreshRules() {
   const raw = getSettings().shieldKeywords;
@@ -251,11 +254,75 @@ function cancelLeave() {
   leaveTimer = null;
 }
 
+/** 指针此刻是否真的还停在这条弹幕上（`:hover` 由浏览器维护，鼠标滑走后即为 false） */
+function pointerOver(el) {
+  try {
+    return el.matches(":hover");
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * 把悬停条目的操作行夹回画面可见区（左右两端贴边、下方放不下就翻到文字上方）。
+ * 悬停期间这条动画是暂停的，所以只在悬停时与定时核对里算，不需要每帧跑。
+ */
+function placeActions(layer, el) {
+  const row = el.querySelector(`.${ACTIONS_CLS}`);
+  if (!row) return;
+  // 取「自然位置」：先减掉上一次加上的偏移，避免把旧偏移量进这一轮（省一次强制重排）
+  const prevDx = Number(row.dataset.dyexDx) || 0;
+  const prevDy = Number(row.dataset.dyexDy) || 0;
+  const rr = row.getBoundingClientRect();
+  const ir = el.getBoundingClientRect();
+  const lr = layer.getBoundingClientRect();
+  const { dx, dy } = clampActionsOffset({
+    rowLeft: rr.left - prevDx,
+    rowTop: rr.top - prevDy,
+    rowWidth: rr.width,
+    rowHeight: rr.height,
+    rowBottom: rr.top - prevDy + rr.height,
+    layerLeft: lr.left,
+    layerRight: lr.right,
+    layerTop: lr.top,
+    layerBottom: lr.bottom,
+    itemTop: ir.top,
+  });
+  if (dx === prevDx && dy === prevDy) return;
+  row.dataset.dyexDx = String(dx);
+  row.dataset.dyexDy = String(dy);
+  row.style.transform = dx || dy ? `translate(${dx}px, ${dy}px)` : "";
+}
+
+/** 解除当前悬停：恢复动画、去掉高亮类与操作行偏移，并取消待执行的宽限定时 */
+function releaseHover(layer) {
+  cancelLeave();
+  const el = hoverEl;
+  if (!el) return;
+  hoverEl = null;
+  el.classList.remove("is-hover");
+  layer.classList.remove("is-hovering");
+  const row = el.querySelector(`.${ACTIONS_CLS}`);
+  if (row) {
+    row.style.transform = "";
+    delete row.dataset.dyexDx;
+    delete row.dataset.dyexDy;
+  }
+  const anim = anims.get(el);
+  if (anim && anim.playState === "paused") {
+    try {
+      anim.play();
+    } catch (_) {
+      /* 元素可能刚被移除 */
+    }
+  }
+}
+
 /**
  * 悬停期间把这一条标记为唯一命中目标：
  * 其余弹幕 `pointer-events: none`，后飘来的弹幕既不能盖住它也不能抢走悬停。
  */
-function beginHover(layer, el, anim) {
+function beginHover(layer, el) {
   // hoverEl 已脱离文档（层被清空 / 被裁掉）时不再挡住新的悬停
   if (hoverEl && !hoverEl.isConnected) hoverEl = null;
   if (hoverEl === el) {
@@ -263,31 +330,52 @@ function beginHover(layer, el, anim) {
     cancelLeave();
     return;
   }
+  // 指针已经不在原来那条上了（先滑走、宽限期还没走完就落到这条）：把旧的放掉，
+  // 焦点交给现在这条。否则旧的一条会一直占着锁，鼠标停在新的弹幕上也出不来 +1 / 收藏。
+  if (hoverEl && !pointerOver(hoverEl)) releaseHover(layer);
   if (hoverEl) return;
   cancelLeave();
   hoverEl = el;
   el.classList.add("is-hover");
   layer.classList.add("is-hovering");
-  anim.pause();
-}
-
-function endHover(layer, el, anim) {
-  cancelLeave();
-  if (hoverEl !== el) return;
-  hoverEl = null;
-  el.classList.remove("is-hover");
-  layer.classList.remove("is-hovering");
-  if (anim.playState === "paused") anim.play();
+  const anim = anims.get(el);
+  if (anim) {
+    try {
+      anim.pause();
+    } catch (_) {
+      /* 元素可能刚被移除 */
+    }
+  }
+  // 操作行此刻才 display: flex，量得到尺寸：把 +1 / 收藏 夹回画面里
+  placeActions(layer, el);
 }
 
 /** 鼠标滑出这一条：宽限一拍再解除，滑回来即撤销（见 HOVER_GRACE_MS） */
-function scheduleEndHover(layer, el, anim) {
+function scheduleEndHover(layer, el) {
   if (hoverEl !== el) return;
   cancelLeave();
   leaveTimer = setTimeout(() => {
     leaveTimer = null;
-    endHover(layer, el, anim);
+    releaseHover(layer);
   }, HOVER_GRACE_MS);
+}
+
+/**
+ * 看门狗：mouseleave 并不总会送达——完全全屏下鼠标移到别的显示器、切走窗口/标签、
+ * 指针被窗口外的地方接管时，浏览器不会再补发 mouseleave，于是这条弹幕永远停在原地
+ * （动画 paused），而 `is-hovering` 让其余弹幕都不参与命中，鼠标落在新弹幕上也出不来按钮。
+ * 定期核对「这条是否真的还在指针下」，不是就放掉。
+ */
+function dropStaleHover() {
+  if (!hoverEl) return;
+  const layer = document.getElementById(LAYER_ID);
+  if (!layer) return;
+  if (!hoverEl.isConnected || !document.hasFocus() || !pointerOver(hoverEl)) {
+    releaseHover(layer);
+    return;
+  }
+  // 画面尺寸/布局变化时把操作行重新夹回可见区（值与上次相同则内部直接返回）
+  placeActions(layer, hoverEl);
 }
 
 function renderItem(payload, parts, text, isSelf = false, allowPlus1 = true) {
@@ -387,13 +475,14 @@ function renderItem(payload, parts, text, isSelf = false, allowPlus1 = true) {
     // delay + fill: both：排队期间停在屏幕右侧外（layer 已 overflow: hidden），到点才出发
     { duration, delay: startAt - now, easing: "linear", fill: "both" }
   );
+  anims.set(el, anim);
   anim.onfinish = () => {
-    endHover(layer, el, anim);
+    if (hoverEl === el) releaseHover(layer);
     el.remove();
   };
   // 悬停暂停：否则弹幕飞得太快，+1 / 收藏 按钮根本点不到
-  el.addEventListener("mouseenter", () => beginHover(layer, el, anim));
-  el.addEventListener("mouseleave", () => scheduleEndHover(layer, el, anim));
+  el.addEventListener("mouseenter", () => beginHover(layer, el));
+  el.addEventListener("mouseleave", () => scheduleEndHover(layer, el));
   return true;
 }
 
@@ -423,6 +512,8 @@ function setNativeHidden(hidden) {
 
 function tick() {
   try {
+    // 先把「指针已经不在上面」的悬停放掉，再处理插件（插件没挂上时也要能自愈）
+    dropStaleHover();
     const fiber = findComponent();
     if (!fiber) return;
     const { inst, config } = readPluginState(fiber);
@@ -450,6 +541,8 @@ function tick() {
 export function initDanmakuLayer() {
   tick();
   setInterval(tick, 1000);
+  // 悬停自愈单独跑得快一点：mouseleave 丢失时最多 250ms 就放掉，用户几乎无感
+  setInterval(dropStaleHover, 250);
   onSettingChange((key, value) => {
     if (key !== "danmakuTakeover") return;
     if (!value) {

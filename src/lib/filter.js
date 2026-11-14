@@ -32,6 +32,15 @@ export function parseLevelFromSrc(src) {
   return m ? Number(m[1]) : null;
 }
 
+/**
+ * 聊天条目是否值得挂 +1 / 收藏：空正文与「xx 来了」进场提示都不挂。
+ * 送礼流水按 DOM 结构另判（见 Chat/Shield.js 的 isGiftMessage）。
+ */
+export function isActionableChatText(text) {
+  const t = String(text == null ? "" : text).trim();
+  return !!t && !/来了$/.test(t);
+}
+
 /** 重复弹幕检测：窗口内同一内容出现过则判定重复 */
 export function createRepeatFilter(windowMs = 10000, max = 200) {
   const seen = new Map();
