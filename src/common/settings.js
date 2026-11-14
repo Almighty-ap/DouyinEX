@@ -7,6 +7,7 @@ import {
   DM_SPEED_DEFAULT,
 } from "../lib/barrage.js";
 import { normalizeFavorites } from "../lib/favorites.js";
+import { normalizeHistory } from "../lib/history.js";
 
 export const DEFAULTS = {
   autoQuality: true,
@@ -37,6 +38,9 @@ export const DEFAULTS = {
   loopMax: 5000,
   loopLimitMin: 5,
   loopRandom: false,
+  // 输入框上下键调取「我发送过的弹幕」
+  chatHistoryKeys: true,
+  chatHistory: [],
 };
 
 const MUTEX_KEY = {
@@ -64,6 +68,7 @@ export function normalizeSettings(raw = {}) {
   merged.dmSpeed = clampNum(merged.dmSpeed, DM_SPEED_MIN, DM_SPEED_MAX, DM_SPEED_DEFAULT);
   if (!AREA_KEYS.has(merged.dmArea)) merged.dmArea = DM_AREA_DEFAULT;
   merged.dmFavorites = normalizeFavorites(merged.dmFavorites);
+  merged.chatHistory = normalizeHistory(merged.chatHistory);
   return merged;
 }
 

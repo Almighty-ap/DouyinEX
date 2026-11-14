@@ -25,6 +25,7 @@ const CHECKS = [
   ["plus1", "弹幕 +1（悬停显示）"],
   ["shieldEnter", "屏蔽进场消息"],
   ["shieldRepeat", "屏蔽重复弹幕（10 秒内）"],
+  ["chatHistoryKeys", "输入框上下键调取已发送的弹幕"],
 ];
 
 function checkRow(key, label) {
@@ -43,7 +44,6 @@ function buildHtml() {
   ${CHECKS.slice(0, 9).map(([k, l]) => checkRow(k, l)).join("")}
   <h4>弹幕（画面上漂浮的弹幕）</h4>
   ${CHECKS.slice(9).map(([k, l]) => checkRow(k, l)).join("")}
-  <div class="dyex-tip">画面弹幕的字号 / 不透明度 / 显示区域 / 移动速度已改为跟随抖音自带的「弹幕设置」面板——接管开启时按原生设置渲染，这里不再重复配置</div>
   <div class="dyex-row">屏蔽等级低于
     <input type="number" min="0" max="80" data-key="shieldLevelBelow" data-num="1"> 的用户（0=不限）
   </div>

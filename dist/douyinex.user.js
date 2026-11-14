@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DouyinEX-抖音直播间增强插件
 // @namespace    https://github.com/Almighty-ap/DouyinEX
-// @version      0.1.3
+// @version      0.1.4
 // @description  抖音直播间增强：复制直播流(原画/超清/高清) 自动最高画质 网页全屏/完全全屏 全屏净化 同步时间 滚轮调音量 弹幕接管与屏蔽 弹幕+1 弹幕收藏 循环发送弹幕 自动抢免费福袋 简洁模式
 // @author       DouyinEX
 // @license      MIT
@@ -134,6 +134,43 @@
     return cur.filter((t) => t.toLowerCase().includes(q));
   }
 
+  // src/lib/history.js
+  var HISTORY_MAX = 50;
+  function capOf(max) {
+    const n = Math.floor(Number(max));
+    return Number.isFinite(n) && n > 0 ? n : HISTORY_MAX;
+  }
+  function clean(text) {
+    return typeof text === "string" ? text.replace(/\s+/g, " ").trim() : "";
+  }
+  function normalizeHistory(raw, max = HISTORY_MAX) {
+    const out = [];
+    for (const item of Array.isArray(raw) ? raw : []) {
+      const text = clean(item);
+      if (text) out.push(text);
+    }
+    return out.slice(-capOf(max));
+  }
+  function pushHistory(list, text, max = HISTORY_MAX) {
+    const cap = capOf(max);
+    const cur = normalizeHistory(list, cap);
+    const value = clean(text);
+    if (!value || cur.length && cur[cur.length - 1] === value) return cur;
+    return [...cur, value].slice(-cap);
+  }
+  function nextHistoryIndex(index, length, dir) {
+    const n = Math.floor(Number(length));
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const i = Number.isInteger(index) && index >= 0 && index < n ? index : null;
+    if (dir < 0) {
+      if (i === null) return n - 1;
+      return Math.max(0, i - 1);
+    }
+    if (i === null) return null;
+    const next = i + 1;
+    return next >= n ? null : next;
+  }
+
   // src/common/settings.js
   var DEFAULTS = {
     autoQuality: true,
@@ -163,7 +200,10 @@
     loopMin: 3e3,
     loopMax: 5e3,
     loopLimitMin: 5,
-    loopRandom: false
+    loopRandom: false,
+    // 输入框上下键调取「我发送过的弹幕」
+    chatHistoryKeys: true,
+    chatHistory: []
   };
   var MUTEX_KEY = {
     autoFull: "autoWebFull",
@@ -187,6 +227,7 @@
     merged.dmSpeed = clampNum(merged.dmSpeed, DM_SPEED_MIN, DM_SPEED_MAX, DM_SPEED_DEFAULT);
     if (!AREA_KEYS.has(merged.dmArea)) merged.dmArea = DM_AREA_DEFAULT;
     merged.dmFavorites = normalizeFavorites(merged.dmFavorites);
+    merged.chatHistory = normalizeHistory(merged.chatHistory);
     return merged;
   }
   function load() {
@@ -374,31 +415,72 @@
     return false;
   }
 
-  // src/packages/Chat/send.js
-  var EDITOR = ".webcast-chatroom___input-container .editor-kit-container";
-  var SEND_BTN = ".webcast-chatroom___send-btn";
-  function findChatInput() {
-    return document.querySelector(EDITOR);
+  // src/packages/Chat/historyStore.js
+  var selfSendAt = 0;
+  function markSelfSend() {
+    selfSendAt = Date.now();
   }
-  function fillEditor(el, text) {
-    el.focus();
-    document.execCommand("selectAll", false);
-    return document.execCommand("insertText", false, text);
+  function isSelfSendRecent(ms = 2e3) {
+    return Date.now() - selfSendAt < ms;
+  }
+  function recordSent(text) {
+    const cur = getSettings().chatHistory;
+    const next = pushHistory(cur, text);
+    if (next.length === cur.length && next.every((v, i) => v === cur[i])) return false;
+    setSetting("chatHistory", next);
+    return true;
+  }
+
+  // src/packages/Chat/send.js
+  var CHAT_EDITOR = ".webcast-chatroom___input-container .editor-kit-container";
+  var SEND_BTN = ".webcast-chatroom___send-btn";
+  var ZERO_WIDTH = String.fromCharCode(8203);
+  var CLEAR_POLL_MS = 250;
+  var CLEAR_POLL_TIMES = 10;
+  function findChatInput() {
+    return document.querySelector(CHAT_EDITOR);
+  }
+  function getEditorText(el) {
+    return el.innerText.split(ZERO_WIDTH).join("").trim();
+  }
+  function setEditorText(el, text) {
+    if (!el) return false;
+    const value = text == null ? "" : String(text);
+    const write = () => {
+      el.focus();
+      document.execCommand("selectAll", false);
+      return value ? document.execCommand("insertText", false, value) : document.execCommand("delete", false);
+    };
+    const ok = write();
+    if (ok && getEditorText(el) !== value) write();
+    return ok;
   }
   function fillChat(text) {
     const input = findChatInput();
     if (!input) return false;
-    return fillEditor(input, text);
+    return setEditorText(input, text);
   }
-  async function sendChat(text) {
+  function isEditorEmpty() {
+    const input = findChatInput();
+    return !input || getEditorText(input) === "";
+  }
+  async function waitEditorCleared() {
+    for (let i = 0; i < CLEAR_POLL_TIMES; i++) {
+      await sleep(CLEAR_POLL_MS);
+      if (isEditorEmpty()) return true;
+    }
+    return false;
+  }
+  async function sendChat(text, { record = true } = {}) {
     const input = findChatInput();
     if (!input) return false;
-    if (!fillEditor(input, text)) return false;
+    if (!setEditorText(input, text)) return false;
     await sleep(80);
     const btn = document.querySelector(SEND_BTN);
     if (!btn || btn.classList.contains("disable")) return false;
+    markSelfSend();
     btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    await sleep(150);
+    if (record && await waitEditorCleared()) recordSent(text);
     return true;
   }
 
@@ -424,7 +506,7 @@
     const texts = parseTexts();
     if (!texts.length) return stopLoop();
     const idx = s.loopRandom ? randomInt(0, texts.length - 1) : offset++ % texts.length;
-    const ok = await sendChat(texts[idx]);
+    const ok = await sendChat(texts[idx], { record: false });
     if (!ok) {
       toast("\u53D1\u9001\u5931\u8D25\uFF1A\u8BF7\u786E\u8BA4\u5DF2\u767B\u5F55\u6296\u97F3\uFF0C\u4E14\u804A\u5929\u8F93\u5165\u6846\u53EF\u7528\uFF0C\u5FAA\u73AF\u5DF2\u505C\u6B62", "error");
       return stopLoop();
@@ -1131,7 +1213,8 @@ iframe[data-container-id^="@annie/"],
     ["danmakuTakeover", "\u63A5\u7BA1\u60AC\u6D6E\u5F39\u5E55\uFF08\u753B\u9762\u5F39\u5E55 +1 \u4E0E\u5C4F\u853D\uFF09"],
     ["plus1", "\u5F39\u5E55 +1\uFF08\u60AC\u505C\u663E\u793A\uFF09"],
     ["shieldEnter", "\u5C4F\u853D\u8FDB\u573A\u6D88\u606F"],
-    ["shieldRepeat", "\u5C4F\u853D\u91CD\u590D\u5F39\u5E55\uFF0810 \u79D2\u5185\uFF09"]
+    ["shieldRepeat", "\u5C4F\u853D\u91CD\u590D\u5F39\u5E55\uFF0810 \u79D2\u5185\uFF09"],
+    ["chatHistoryKeys", "\u8F93\u5165\u6846\u4E0A\u4E0B\u952E\u8C03\u53D6\u5DF2\u53D1\u9001\u7684\u5F39\u5E55"]
   ];
   function checkRow(key, label) {
     return `<label><input type="checkbox" data-key="${key}"> ${label}</label>`;
@@ -1146,7 +1229,6 @@ iframe[data-container-id^="@annie/"],
   ${CHECKS.slice(0, 9).map(([k, l]) => checkRow(k, l)).join("")}
   <h4>\u5F39\u5E55\uFF08\u753B\u9762\u4E0A\u6F02\u6D6E\u7684\u5F39\u5E55\uFF09</h4>
   ${CHECKS.slice(9).map(([k, l]) => checkRow(k, l)).join("")}
-  <div class="dyex-tip">\u753B\u9762\u5F39\u5E55\u7684\u5B57\u53F7 / \u4E0D\u900F\u660E\u5EA6 / \u663E\u793A\u533A\u57DF / \u79FB\u52A8\u901F\u5EA6\u5DF2\u6539\u4E3A\u8DDF\u968F\u6296\u97F3\u81EA\u5E26\u7684\u300C\u5F39\u5E55\u8BBE\u7F6E\u300D\u9762\u677F\u2014\u2014\u63A5\u7BA1\u5F00\u542F\u65F6\u6309\u539F\u751F\u8BBE\u7F6E\u6E32\u67D3\uFF0C\u8FD9\u91CC\u4E0D\u518D\u91CD\u590D\u914D\u7F6E</div>
   <div class="dyex-row">\u5C4F\u853D\u7B49\u7EA7\u4F4E\u4E8E
     <input type="number" min="0" max="80" data-key="shieldLevelBelow" data-num="1"> \u7684\u7528\u6237\uFF080=\u4E0D\u9650\uFF09
   </div>
@@ -1520,7 +1602,7 @@ iframe[data-container-id^="@annie/"],
     btn.title = "\u6536\u85CF\u8FD9\u6761\u5F39\u5E55\uFF08\u53EF\u5728 DouyinEX \u9762\u677F\u7684\u5F39\u5E55\u6536\u85CF\u4E2D\u67E5\u770B\uFF09";
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      collectDanmaku(text);
+      collectDanmaku(typeof text === "function" ? text(e) : text);
     });
     return btn;
   }
@@ -1574,6 +1656,13 @@ iframe[data-container-id^="@annie/"],
     if (s.shieldRepeat && isRepeat(content)) return true;
     return false;
   }
+  function textAtEvent(e, fallback) {
+    const node = e && e.currentTarget;
+    const item = node && node.closest ? node.closest(ITEM) : null;
+    if (!item) return fallback;
+    const text = getContentOnly(getItemText(item));
+    return text || fallback;
+  }
   function addButtons(item) {
     if (item.querySelector(`[${BTN_ATTR}]`)) return;
     if (isGiftMessage(item)) return;
@@ -1588,12 +1677,12 @@ iframe[data-container-id^="@annie/"],
       plus.title = "\u8DDF\u53D1\u8FD9\u6761\u5F39\u5E55";
       plus.addEventListener("click", async (e) => {
         e.stopPropagation();
-        const ok = await sendChat(text);
+        const ok = await sendChat(textAtEvent(e, text));
         if (!ok) toast("\u53D1\u9001\u5931\u8D25\uFF1A\u8BF7\u786E\u8BA4\u5DF2\u767B\u5F55\u6296\u97F3\uFF0C\u4E14\u804A\u5929\u8F93\u5165\u6846\u53EF\u7528", "error");
       });
       item.appendChild(plus);
     }
-    item.appendChild(makeFavoriteButton(FAV_CLASS, text));
+    item.appendChild(makeFavoriteButton(FAV_CLASS, (e) => textAtEvent(e, text)));
   }
   var HIDDEN_ATTR = "data-dyex-hidden";
   var handled = /* @__PURE__ */ new WeakSet();
@@ -1639,6 +1728,109 @@ iframe[data-container-id^="@annie/"],
     new MutationObserver((muts) => {
       for (const m of muts) m.addedNodes.forEach(scan);
     }).observe(list, { childList: true, subtree: true });
+  }
+
+  // src/packages/Chat/History.js
+  var ZERO_WIDTH2 = String.fromCharCode(8203);
+  var INPUT_BOX = ".webcast-chatroom___input-container";
+  var USER_EDIT_MS = 300;
+  var WRITE_DEBOUNCE_MS = 50;
+  var REPEAT_MIN_MS = 150;
+  var bound = false;
+  var browseIndex = null;
+  var applied = null;
+  var tracked = "";
+  var userDeletedAt = 0;
+  var writeTimer = null;
+  var lastStepAt = 0;
+  function editorText(el) {
+    return el.innerText.split(ZERO_WIDTH2).join("").replace(/\s+/g, " ").trim();
+  }
+  function resetBrowse() {
+    browseIndex = null;
+    applied = null;
+  }
+  function stepIndex(dir, length) {
+    return nextHistoryIndex(browseIndex, length, dir);
+  }
+  function flushWrite(el) {
+    writeTimer = null;
+    if (browseIndex === null) {
+      const now2 = editorText(el);
+      if (now2 === "" || now2 === applied) setEditorText(el, "");
+      applied = null;
+      return;
+    }
+    const list = getSettings().chatHistory;
+    const target = list[browseIndex];
+    const now = editorText(el);
+    if (target === void 0 || now !== "" && now !== applied) {
+      resetBrowse();
+      return;
+    }
+    setEditorText(el, target);
+    applied = target;
+  }
+  function scheduleWrite(el) {
+    clearTimeout(writeTimer);
+    writeTimer = setTimeout(() => flushWrite(el), WRITE_DEBOUNCE_MS);
+  }
+  function trackText() {
+    const el = findChatInput();
+    const now = el ? editorText(el) : "";
+    if (now === tracked) return;
+    const prev = tracked;
+    tracked = now;
+    if (!prev || now) return;
+    if (isSelfSendRecent()) return;
+    if (Date.now() - userDeletedAt < USER_EDIT_MS) return;
+    recordSent(prev);
+  }
+  function onKeyDown(e) {
+    if (e.isComposing || e.keyCode === 229) return;
+    const target = e.target;
+    const el = target && target.closest ? target.closest(CHAT_EDITOR) : null;
+    if (!el) return;
+    if (e.key === "Backspace" || e.key === "Delete" || (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "x") {
+      userDeletedAt = Date.now();
+    }
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    if (!getSettings().chatHistoryKeys) return;
+    const list = getSettings().chatHistory;
+    if (!list.length) return;
+    const dir = e.key === "ArrowUp" ? -1 : 1;
+    const text = editorText(el);
+    const writing = writeTimer !== null;
+    const browsing = browseIndex !== null && (text === applied || writing && text === "");
+    if (dir < 0) {
+      if (!browsing && text !== "") return;
+    } else if (!browsing) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    const now = Date.now();
+    if (e.repeat && now - lastStepAt < REPEAT_MIN_MS) return;
+    lastStepAt = now;
+    if (!browsing) resetBrowse();
+    browseIndex = stepIndex(dir, list.length);
+    scheduleWrite(el);
+  }
+  async function startTracker() {
+    const box = await waitFor(INPUT_BOX, 6e4);
+    if (!box) return;
+    new MutationObserver(trackText).observe(box, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+    trackText();
+  }
+  function initChatHistory() {
+    if (bound) return;
+    bound = true;
+    document.addEventListener("keydown", onKeyDown, true);
+    startTracker();
   }
 
   // src/packages/Danmaku/Layer.js
@@ -2449,6 +2641,7 @@ iframe[data-container-id^="@annie/"],
     initWheelVolume();
     initSyncTime();
     initChatShield();
+    initChatHistory();
     initDanmakuLayer();
     initLottery();
     const s = getSettings();

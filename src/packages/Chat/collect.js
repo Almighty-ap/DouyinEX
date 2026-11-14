@@ -19,7 +19,11 @@ export function collectDanmaku(text) {
   return true;
 }
 
-/** 收藏按钮：className 由调用方决定（画面弹幕层与聊天列表样式不同） */
+/**
+ * 收藏按钮：className 由调用方决定（画面弹幕层与聊天列表样式不同）。
+ * text 可以是字符串，也可以是 (event) => string —— 聊天列表的虚拟列表会复用条目节点，
+ * 需要在点击那一刻按当前 DOM 重新取正文。
+ */
 export function makeFavoriteButton(className, text) {
   const btn = document.createElement("span");
   btn.className = className;
@@ -28,7 +32,7 @@ export function makeFavoriteButton(className, text) {
   btn.title = "收藏这条弹幕（可在 DouyinEX 面板的弹幕收藏中查看）";
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    collectDanmaku(text);
+    collectDanmaku(typeof text === "function" ? text(e) : text);
   });
   return btn;
 }

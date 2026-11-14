@@ -75,6 +75,19 @@ function shouldHide(item) {
   return false;
 }
 
+/**
+ * 读取按钮所在条目「此刻」的正文。
+ * 抖音的虚拟列表会复用条目节点（同一条目 DOM 换显示另一条消息），按钮里存的是创建时的
+ * 文本，直接用它会出现「点这条、发出的是别的条」；所以点击那一刻重新按当前 DOM 读一遍。
+ */
+function textAtEvent(e, fallback) {
+  const node = e && e.currentTarget;
+  const item = node && node.closest ? node.closest(ITEM) : null;
+  if (!item) return fallback;
+  const text = getContentOnly(getItemText(item));
+  return text || fallback;
+}
+
 /** 悬停浮出 +1（可关）与 收藏 按钮；按钮都带 data-dyex-btn 便于正文提取与重扫清理 */
 function addButtons(item) {
   if (item.querySelector(`[${BTN_ATTR}]`)) return;
@@ -90,12 +103,12 @@ function addButtons(item) {
     plus.title = "跟发这条弹幕";
     plus.addEventListener("click", async (e) => {
       e.stopPropagation();
-      const ok = await sendChat(text);
+      const ok = await sendChat(textAtEvent(e, text));
       if (!ok) toast("发送失败：请确认已登录抖音，且聊天输入框可用", "error");
     });
     item.appendChild(plus);
   }
-  item.appendChild(makeFavoriteButton(FAV_CLASS, text));
+  item.appendChild(makeFavoriteButton(FAV_CLASS, (e) => textAtEvent(e, text)));
 }
 
 const HIDDEN_ATTR = "data-dyex-hidden";

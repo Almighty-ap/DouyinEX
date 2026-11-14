@@ -29,7 +29,7 @@ async function tick() {
   const texts = parseTexts();
   if (!texts.length) return stopLoop();
   const idx = s.loopRandom ? randomInt(0, texts.length - 1) : offset++ % texts.length;
-  const ok = await sendChat(texts[idx]);
+  const ok = await sendChat(texts[idx], { record: false });
   if (!ok) {
     toast("发送失败：请确认已登录抖音，且聊天输入框可用，循环已停止", "error");
     return stopLoop();

@@ -12,6 +12,7 @@ import {
   initSyncTime,
 } from "./packages/Player/Player.js";
 import { initChatShield } from "./packages/Chat/Shield.js";
+import { initChatHistory } from "./packages/Chat/History.js";
 import { initDanmakuLayer } from "./packages/Danmaku/Layer.js";
 import { initLottery } from "./packages/Lottery/Lottery.js";
 
@@ -31,6 +32,7 @@ function main() {
   initWheelVolume();
   initSyncTime();
   initChatShield();
+  initChatHistory();
   initDanmakuLayer();
   initLottery();
 
